@@ -1,0 +1,24 @@
+models:
+  gm_model:
+    model_id: openai:gpt-5-mini
+  actor_model:
+    model_id: openai:gpt-5-mini
+  auditor_model:
+    model_id: openai:gpt-5-mini
+
+agents:
+  gm:
+    model: gm_model
+    temperature: 0.3
+    max_output_tokens: 1000
+    retries: 2
+  actor:
+    model: actor_model
+    temperature: 0.85
+    max_output_tokens: 600
+    retries: 2
+  auditor:
+    model: auditor_model
+    temperature: 0.0
+    max_output_tokens: 400
+    retries: 1

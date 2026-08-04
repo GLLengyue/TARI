@@ -1,0 +1,49 @@
+campaign_id: station-zero
+title: Station Zero
+seed: 184729
+opening: |
+  Rain falls through the station's broken roof. Only one monitor in the control room
+  still flickers. Mira stands beside the console, her right hand never leaving the
+  service key at her belt.
+scene:
+  scene_id: control-room
+  title: Abandoned Control Room
+  location: Station Zero control room
+  public_facts:
+    - The monitoring system stopped recording at 23:14.
+    - Unknown footsteps can occasionally be heard in the corridor.
+  hidden_facts:
+    - The final maintenance-log page was replaced.
+    - The monitoring failure was caused by deliberate human intervention.
+player:
+  player_id: player
+  name: Investigator
+  description: An independent investigator trapped inside Station Zero.
+actor:
+  actor_id: mira
+  name: Mira
+  description: A former station security officer who is guarded and observant.
+  goals:
+    - Leave the station alive.
+    - Conceal how much she knows until she trusts the player.
+  knowledge:
+    - fact_id: monitoring_tampered
+      content: The monitoring system was deliberately tampered with.
+      confidence: 1.0
+      source: prior investigation
+  secrets:
+    - Mira inspected the dead camera feed before the player arrived.
+story_framework:
+  premise: Discover why Station Zero's monitoring system failed and decide whether to trust Mira.
+  required_beats:
+    - The player learns the outage was not an ordinary accident.
+  optional_beats:
+    - The player discovers the replaced maintenance-log page.
+    - Mira's trust in the player changes.
+  forbidden_revelations:
+    - The saboteur's identity must not be revealed in this MVP scene.
+  possible_endings:
+    - The player and Mira leave together.
+    - The player enters the corridor alone.
+    - The player remains to restore monitoring.
+    - Distrust separates the pair.
