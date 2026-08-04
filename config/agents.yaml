@@ -1,10 +1,10 @@
 models:
   gm_model:
-    model_id: openai:gpt-5-mini
+    model_id: deepseek:deepseek-chat
   actor_model:
-    model_id: openai:gpt-5-mini
+    model_id: deepseek:deepseek-chat
   auditor_model:
-    model_id: openai:gpt-5-mini
+    model_id: deepseek:deepseek-chat
 
 agents:
   gm:
