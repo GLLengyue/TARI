@@ -10,6 +10,35 @@
 | 目标形态 / Target | 可稳定完成多场景短篇战役的 TRPG runtime / a runtime that can complete short multi-scene campaigns reliably |
 | 规划方式 / Planning model | 以退出条件推进，不承诺固定日期 / exit-gated phases rather than calendar promises |
 
+## 0. 待办备忘 | Open TODOs
+
+- **CLI 实时性（流式输出 + CoT 进度）**：✅ CLI 阶段流式已完成（TurnOrchestrator 进度回调 + `trpg play` 即时渲染，`--no-progress` 可关）。待做：token 级流式渲染与 GM chain of thought 进度面板，留给 Phase 5 的 HTTP/SSE 层；CoT 是非权威 UX 通道，不得进入 SSE 正文/事件正文。
+  **Streaming output + CoT progress**: ✅ stage streaming shipped in the CLI; token-level streaming and CoT panels belong to the Phase 5 SSE layer as non-authoritative UX.
+
+- **角色卡兼容（Character Card V2/V3）**：✅ 完成。导入器（`trpg import-card`，PNG/JSON → ActorState + sidecar，含语言检测与场景生成）；lorebook 双向映射（`trpg export-lorebook` + `trpg new --world-info`，TARI 语义通过 `comment` 标记 `tari:public`/`tari:hidden`/`tari:know:<actor>` 保留）。
+  **Character card compatibility (V2/V3)**: ✅ done. Importer plus bidirectional lorebook mapping (world-info export/import with TARI markers in comments).
+
+- **强 GM Agent（工具调用）**：✅ 只读查询工具已完成（`gm_search_rules` / `gm_search_world` / `gm_get_character_card` / `gm_get_scenario_outline`），工具调用写入 `tool_called` 审计事件。核心规则内联进 GM 提示词，工具只作按需补充，每次 GM 调用有 10 次请求上限防失控（实测曾出现工具反复查询死循环，已通过内联规则 + 明确"至多一次工具调用"修复）。待做：提案工具化（`request_check` / `propose_patch` / `grant_spotlight` 从 typed output 演进为工具）。
+  **Strong GM agent with tools**: ✅ read-only retrieval tools shipped with audit events; inline core rules + request limits fix a tool-call loop found in real testing. Proposal tools are next.
+
+- **弱 Roleplay Agent（虚构层专用，方案 A 已确认）**：✅ 契约已显式化并在测试中强制（fiction-only 视图：只含自身状态、公开事实、观察、近期公开事件、Spotlight；多角色隔离测试覆盖其他角色的知识/秘密不得泄漏）。
+  **Weak roleplay agents (Option A confirmed)**: ✅ fiction-only contract enforced by tests, including multi-actor knowledge isolation.
+
+- **分层设计哲学（虚构层/规则层/事实层）+ Spotlight 策略**：✅ SpotlightPolicy 已实现（GM 提议 + 运行时校验 + 无效提议回退玩家 + `spotlight_policy_fallback` 审计事件，回合不中断）。三层模型见 `docs/design/three-layer-architecture.md`。
+  **Three-layer philosophy + Spotlight policy**: ✅ SpotlightPolicy shipped with fallback and audit events. See `docs/design/three-layer-architecture.md`.
+
+- **回合原子事务 + `turn_aborted`**：✅ `TurnTransaction` 在单个 SQLite 事务中提交一回合的全部事件、快照与 `turn_results`；任何失败只落一条 `turn_aborted`（含错误与已收集事件清单），半截事件永不入库，重试会得到同一骰点序列。
+  **Atomic turn transactions**: ✅ one transaction per turn; failures persist only a `turn_aborted` audit event and retries stay deterministic.
+
+- **`request_id` 幂等**：✅ `process_turn(..., request_id=)` 重复请求直接返回缓存结果（`turn_results` 表），不重复执行回合；CLI 每回合生成新 id，为 HTTP 客户端重试预留。
+  **Request idempotency**: ✅ duplicate request_ids return the cached `TurnResult` without re-running.
+
+- **快照重建命令（`trpg recover`）**：✅ `trpg recover CAMPAIGN_ID --scenario SCENARIO` 从 `campaign_created` + `state_patch_committed` 事件重建快照，恢复 turn/version/Spotlight，并记录 `snapshot_rebuilt` 事件。本轮真实事故已用它验证。
+  **Snapshot rebuild (`trpg recover`)**: ✅ shipped and verified against a real corrupted snapshot.
+
+- **代码质量收尾**：✅ mypy 0 错误（含 types-PyYAML 桩）、ruff 全绿、`process_turn` 拆分为带类型标注的辅助方法、补丁操作增加类型守卫（add/remove 目标必须是列表、increment 必须是数字，报 `RuleViolation` 而非 TypeError）。
+  **Code quality**: ✅ mypy clean, ruff clean, typed helpers, clearer patch validation errors.
+
 ## 1. 项目目标 | Project objective
 
 TARI 的核心问题不是“让模型写出更漂亮的 prose”，而是让模型协作过程具备可验证的权限、状态和随机性边界：

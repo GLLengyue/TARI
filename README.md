@@ -73,7 +73,7 @@ For real cloud agents:
 
 ```bash
 cp .env.example .env
-export OPENAI_API_KEY=...
+# 把 DeepSeek API key 填入 .env（CLI 会自动加载）
 trpg new examples/station_zero.yaml
 trpg play station-zero
 ```
@@ -82,10 +82,26 @@ trpg play station-zero
 
 Model identifiers are configured in `config/agents.yaml`. PydanticAI accepts provider-qualified model identifiers; keep credentials in environment variables.
 
+## 本地化 | Localization
+
+目前原生支持英文和简体中文。创建战役时用 `--lang` 选择语言；未指定时使用场景文件的 `default_locale`（默认为 `en`）。语言会存入战役状态，之后游玩全程——GM、NPC、Auditor 和 CLI 界面——都会使用该语言。
+
+```bash
+trpg new examples/station_zero.yaml --lang zh
+trpg play station-zero
+```
+
+场景文件通过 `localizations:` 段提供多语言内容。新增语言时，在 `src/trpg_runtime/i18n.py` 注册语言代码，并补充对应的界面字符串与场景翻译即可。
+
+The runtime natively supports English and Simplified Chinese. Pass `--lang` when creating a campaign; the language is stored in the campaign state and used for the whole session. Scenario files carry per-locale content under `localizations:`. To add a language, register it in `src/trpg_runtime/i18n.py` and provide UI strings plus scenario translations.
+
 ## CLI 命令 | CLI commands
 
 ```text
 trpg new SCENARIO [--campaign-id ID] [--seed N] [--fake]
+trpg new SCENARIO --world-info worldinfo.json   # 合并 SillyTavern 世界书
+trpg import-card CARD [--sidecar SIDECAR] [--output FILE] [--seed N] [--campaign-id ID] [--show]
+trpg export-lorebook CAMPAIGN_ID [--output FILE]  # 导出为 SillyTavern world info
 trpg play CAMPAIGN_ID [--debug] [--fake]
 trpg inspect-state CAMPAIGN_ID [--all]
 trpg inspect-events CAMPAIGN_ID
@@ -95,6 +111,20 @@ trpg replay CAMPAIGN_ID
 默认数据存储在 `runtime-data/trpg.db`，可通过 `TRPG_DB_PATH` 覆盖。
 
 Data is stored in `runtime-data/trpg.db` by default. Override it with `TRPG_DB_PATH`.
+
+## 角色卡导入 | Character card import
+
+支持导入 SillyTavern 生态的 Character Card V2/V3（PNG 或 JSON 文件），自动映射为可游玩的场景：
+
+```bash
+trpg import-card path/to/Seraphina.png --output examples/seraphina.yaml
+trpg new examples/seraphina.yaml
+trpg play seraphina
+```
+
+字段映射：`name` → 角色名，`description`/`personality` → 角色描述，`first_mes` → 开场白，`character_book` → 角色知识，`extensions.tari` → TARI 专属字段（goals/attributes/knowledge）。可选 `--sidecar` 提供 GM 专属数据（secrets、goals、场景隐藏事实等），这些数据不会写入公开卡文件。
+
+It imports SillyTavern Character Cards (V2/V3, PNG or JSON) into playable scenarios: `name` → actor, `first_mes` → opening, `character_book` → knowledge, plus an optional GM-only sidecar for secrets and scene facts.
 
 ## 架构 | Architecture
 
