@@ -140,6 +140,7 @@ class CampaignState(BaseModel):
     opening: str
     turn_number: int = 0
     seed: int
+    locale: str = "en"
     scene: SceneState
     player: PlayerState
     actors: dict[str, ActorState]
