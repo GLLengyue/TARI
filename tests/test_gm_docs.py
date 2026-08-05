@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 from trpg_runtime.agents import FakeAgentSuite
+from trpg_runtime.domain import CampaignRules, CampaignState
 from trpg_runtime.gm_docs import (
     GMDocDeps,
     build_registry,
@@ -19,7 +20,24 @@ def test_search_rules_finds_2d6_bands():
     deps = GMDocDeps(registry=build_registry(state), state=state)
     text = gm_search_rules(SimpleNamespace(deps=deps), "10 full success")
     assert "10 or higher" in text
-    assert "[rules:pbta-core]" in text
+    assert "[rules:ruleset-pbta-minimal]" in text
+
+
+def test_old_snapshot_without_rules_field_loads_with_default():
+    state = load_scenario("examples/station_zero.yaml")
+    restored = CampaignState.model_validate_json(state.model_dump_json(exclude={"rules"}))
+    assert restored.rules.ruleset_id == "pbta-minimal"
+    assert restored.rules.custom_rules == ""
+
+
+def test_custom_rules_enter_gm_registry():
+    state = load_scenario("examples/station_zero.yaml")
+    state = state.model_copy(
+        update={"rules": CampaignRules(ruleset_id="pbta-minimal", custom_rules="GM decides all.")}
+    )
+    deps = GMDocDeps(registry=build_registry(state), state=state)
+    text = gm_search_rules(SimpleNamespace(deps=deps), "decides")
+    assert "GM decides all" in text
 
 
 def test_search_world_finds_public_and_hidden_facts():
@@ -57,7 +75,7 @@ def test_tool_calls_are_recorded_on_deps():
     gm_search_rules(SimpleNamespace(deps=deps), "spotlight")
     gm_get_character_card(SimpleNamespace(deps=deps), "mira")
     assert [c["tool"] for c in deps.calls] == ["search_rules", "get_character_card"]
-    assert deps.calls[0]["sources"] == ["rules:pbta-core"]
+    assert deps.calls[0]["sources"] == ["rules:ruleset-pbta-minimal"]
 
 
 def test_runtime_records_tool_called_events(tmp_path):

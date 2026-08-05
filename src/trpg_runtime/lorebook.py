@@ -62,6 +62,45 @@ def world_info_from_state(state: CampaignState, book_name: str | None = None) ->
     }
 
 
+def normalize_world_book(book: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a SillyTavern world-info book for TARI import.
+
+    Foreverse cards and some tools ship ``entries`` as a list; TARI's
+    ``apply_world_info`` expects a dict keyed by entry uid.  This helper
+    converts list entries (keeping ``content``, ``comment``, ``constant``)
+    so both shapes import cleanly.
+    """
+    entries = book.get("entries", {})
+    if isinstance(entries, list):
+        converted: dict[str, Any] = {}
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            uid = str(entry.get("id", index))
+            converted[uid] = {
+                "uid": uid,
+                "key": list(entry.get("keys") or entry.get("key") or []),
+                "keysecondary": list(
+                    entry.get("secondary_keys") or entry.get("keysecondary") or []
+                ),
+                "comment": str(entry.get("comment") or ""),
+                "content": str(entry.get("content") or ""),
+                "constant": bool(entry.get("constant", False)),
+                "selective": bool(entry.get("selective", False)),
+                "order": entry.get("insertion_order", entry.get("order", 100)),
+                "position": entry.get("position", 0),
+                "disable": not bool(entry.get("enabled", True)),
+                "caseSensitive": bool(entry.get("caseSensitive", False)),
+                "matchWholeWords": bool(entry.get("matchWholeWords", False)),
+                "scanDepth": entry.get("scanDepth", 4),
+                "sticky": bool(entry.get("sticky", False)),
+                "cooldown": entry.get("cooldown", 0),
+                "delay": entry.get("delay", 0),
+            }
+        return {**book, "entries": converted}
+    return book
+
+
 def apply_world_info(state: CampaignState, book: dict[str, Any]) -> CampaignState:
     """Import a SillyTavern world info into campaign state.
 

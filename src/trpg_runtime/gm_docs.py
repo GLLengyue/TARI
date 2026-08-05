@@ -29,6 +29,33 @@ intent into a check when consequences are uncertain, defines stakes before the
 roll, then narrates consequences based on the resolved roll.
 """
 
+FREE_FORM_RULES = """TARI Freeform Narrative Rules
+
+Adjudication is fiction-first: the GM converts the player's declared intent
+into stakes and consequences based on the fiction, not on numeric bands.
+
+- Resolve directly when the outcome is not genuinely uncertain.
+- When consequences are uncertain, the runtime may still roll 2d6 as a
+  narrative oracle: 10+ the intent lands cleanly, 7-9 it lands with a cost,
+  6 or lower it fails or the situation worsens.  The GM decides what the
+  numbers mean in the fiction.
+- The player decides only the player character's intent; the GM narrates the
+  world's response and keeps the spotlight moving.
+"""
+
+RULES_PRESETS: dict[str, str] = {
+    "pbta-minimal": RULES_TEXT,
+    "freeform-narrative": FREE_FORM_RULES,
+}
+
+
+def effective_rules_text(state: CampaignState) -> str:
+    """Return the campaign's effective rules document for the GM."""
+    rules = state.rules
+    if rules.custom_rules.strip():
+        return rules.custom_rules.strip()
+    return RULES_PRESETS.get(rules.ruleset_id, RULES_TEXT)
+
 
 @dataclass
 class SearchHit:
@@ -110,7 +137,13 @@ class DocumentRegistry:
 def build_registry(state: CampaignState) -> DocumentRegistry:
     """Build the GM's document set for one turn from static rules + campaign state."""
     reg = DocumentRegistry()
-    reg.add_document("rules", "pbta-core", "PbtA Core Rules", RULES_TEXT)
+    rules_text = effective_rules_text(state)
+    reg.add_document(
+        "rules",
+        f"ruleset-{state.rules.ruleset_id}",
+        "Campaign Rules",
+        rules_text,
+    )
 
     world_text = "\n".join(
         [f"Scene: {state.scene.title} ({state.scene.location})"]

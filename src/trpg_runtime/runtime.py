@@ -92,8 +92,8 @@ class TurnOrchestrator:
         resolution = await self._gm_resolve(tx, gm_view, player_input, roll)
         new_state, gm_text, debug = self._commit_resolution(tx, state, turn, resolution, plan)
 
-        actor_speech, actor_action = await self._actor_stage(
-            tx, new_state, resolution, gm_text, recent, debug
+        actor_speech, actor_action, gm_wrap = await self._actor_stage(
+            tx, gm_view, new_state, resolution, gm_text, recent, player_input, roll, debug
         )
 
         new_state.spotlight = SpotlightManager.grant(
@@ -112,6 +112,7 @@ class TurnOrchestrator:
             player_input=player_input,
             roll=roll,
             gm_narration=gm_text,
+            gm_wrap_narration=gm_wrap,
             actor_speech=actor_speech,
             actor_action=actor_action,
             debug=debug,
@@ -194,12 +195,15 @@ class TurnOrchestrator:
     async def _actor_stage(
         self,
         tx: TurnTransaction,
+        gm_view: GMView,
         new_state: CampaignState,
         resolution: GMDecision,
         gm_text: str | None,
         recent: list[str],
+        player_input: str,
+        roll: RollResult | None,
         debug: dict[str, Any],
-    ) -> tuple[str | None, str | None]:
+    ) -> tuple[str | None, str | None, str | None]:
         grant = resolution.next_spotlight
         token, fallback_reason = SpotlightPolicy.resolve(new_state, grant, new_state.turn_number)
         if fallback_reason:
@@ -211,7 +215,7 @@ class TurnOrchestrator:
         tx.append("spotlight_granted", grant.model_dump(mode="json"))
 
         if token.owner_type != SpotlightOwner.ACTOR:
-            return None, None
+            return None, None, None
 
         actor_id = token.owner_id
         view = build_actor_view(
@@ -239,4 +243,11 @@ class TurnOrchestrator:
         debug["actor_view"] = view.model_dump(mode="json")
         debug["actor_turn"] = performance.model_dump(mode="json")
         debug["audit"] = audit.model_dump(mode="json")
-        return actor_speech, actor_action
+        self._progress("gm_wrap")
+        wrap = await self.agents.gm_wrap(
+            gm_view, player_input, roll, resolution, performance
+        )
+        if wrap:
+            tx.append("public_narrative_emitted", {"speaker": "gm", "text": wrap})
+            debug["gm_wrap"] = wrap
+        return actor_speech, actor_action, wrap

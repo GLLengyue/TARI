@@ -102,7 +102,14 @@ def _resolve_parent(document: Any, path: str):
     parts = path.split(".")
     current = document
     for part in parts[:-1]:
-        current = current[int(part)] if isinstance(current, list) else current[part]
+        if isinstance(current, list):
+            if not part.isdigit() or int(part) >= len(current):
+                raise RuleViolation(
+                    f"list index must be a valid integer at '{path}' (segment '{part}')"
+                )
+            current = current[int(part)]
+        else:
+            current = current[part]
     return current, parts[-1]
 
 
@@ -118,7 +125,14 @@ def apply_patches(state: CampaignState, patches: list[StatePatch]) -> CampaignSt
         parent: Any
         key: Any
         parent, key = _resolve_parent(trial, path)
-        existing: Any = parent.get(key) if isinstance(parent, dict) else parent[int(key)]
+        if isinstance(parent, list):
+            if not key.isdigit() or int(key) >= len(parent):
+                raise RuleViolation(
+                    f"list index must be a valid integer at '{path}' (segment '{key}')"
+                )
+            existing: Any = parent[int(key)]
+        else:
+            existing = parent.get(key)
         if patch.old_value is not None and existing != patch.old_value:
             raise RuleViolation(f"old value mismatch at {path}")
         if patch.operation == "set":

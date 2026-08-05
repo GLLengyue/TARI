@@ -211,6 +211,33 @@ def play(campaign_id: str, debug: bool = False, fake: bool = False, progress: bo
             console.print_json(json.dumps(result.debug, default=str))
 
 
+@app.command("web")
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Listen address."),
+    port: int = typer.Option(8765, "--port", help="Listen port."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the browser."),
+):
+    """Start the local web console (FastAPI + static frontend)."""
+    import webbrowser
+
+    import uvicorn
+
+    host = os.getenv("TARI_WEB_HOST", host)
+    port = int(os.getenv("TARI_WEB_PORT", port))
+    console.print(f"TARI web console: http://{host}:{port}/")
+    if host in ("0.0.0.0", "::"):
+        console.print(
+            "[yellow]Listening on all interfaces: anyone on the network can reach this "
+            "console. Use 127.0.0.1 unless you intend that.[/yellow]"
+        )
+    if open_browser:
+        browser_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        webbrowser.open(f"http://{browser_host}:{port}/")
+    from trpg_runtime.web.app import create_app
+
+    uvicorn.run(create_app(), host=host, port=port)
+
+
 @app.command("inspect-state")
 def inspect_state(campaign_id: str, all: bool = typer.Option(False, "--all")):
     state = store().load_snapshot(campaign_id)

@@ -1,5 +1,5 @@
 from trpg_runtime.domain import KnowledgeItem, SpotlightGrant, SpotlightOwner
-from trpg_runtime.projections import build_actor_view
+from trpg_runtime.projections import build_actor_view, build_gm_view, compact_gm_view
 from trpg_runtime.rules import SpotlightManager
 from trpg_runtime.scenario import load_scenario
 
@@ -74,3 +74,18 @@ def test_actor_view_shape_is_fiction_only():
     assert data["actor"]["actor_id"] == "mira"
     assert data["observations"] == ["The player asked about the log."]
     assert data["recent_public_events"] == ["GM said something."]
+
+
+def test_compact_gm_view_drops_presentation_blobs_but_keeps_adjudication_fields():
+    state = load_scenario("examples/station_zero.yaml")
+    state.opening = "<div>long HTML greeting</div>"
+    state.actors["mira"] = state.actors["mira"].model_copy(
+        update={"attributes": {"card": {"first_mes": "<div>HTML</div>"}}}
+    )
+    view = build_gm_view(state, ["recent beat"])
+    serialized = compact_gm_view(view)
+    assert "<div>long HTML greeting</div>" not in serialized
+    assert "<div>HTML</div>" not in serialized
+    assert "recent beat" in serialized
+    assert state.scene.public_facts[0] in serialized
+    assert '"attributes"' not in serialized

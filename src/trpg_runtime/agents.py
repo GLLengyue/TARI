@@ -25,6 +25,38 @@ from .gm_docs import (
     gm_search_world,
 )
 from .i18n import DEFAULT_LOCALE, language_instruction
+from .projections import compact_gm_view
+
+GM_REQUEST_LIMIT = 20
+ACTOR_REQUEST_LIMIT = 20
+WRAP_REQUEST_LIMIT = 8
+
+
+def prefix_delta(previous: str, current: str) -> tuple[str, str]:
+    """Return ``(delta, new_previous)`` for streaming text fields.
+
+    When ``current`` extends ``previous``, only the appended suffix is
+    returned.  If the stream ever resets or rewrites the value, the whole
+    ``current`` value is returned so the frontend can replace its buffer.
+    """
+    previous = previous or ""
+    current = current or ""
+    if current.startswith(previous):
+        return current[len(previous) :], current
+    return current, current
+
+
+class TokenEmitter:
+    """Tracks per-channel text so partial outputs translate to deltas."""
+
+    def __init__(self, on_token) -> None:
+        self.on_token = on_token
+        self._last: dict[str, str] = {}
+
+    def emit(self, channel: str, value: str) -> None:
+        delta, self._last[channel] = prefix_delta(self._last.get(channel, ""), value)
+        if delta:
+            self.on_token(channel, delta)
 
 
 class AgentSuite(ABC):
@@ -45,6 +77,44 @@ class AgentSuite(ABC):
     def drain_tool_calls(self) -> list[dict]:
         """Return and clear tool calls recorded by the last agent run(s)."""
         return []
+
+    async def gm_plan_stream(self, view: GMView, player_input: str, emit) -> GMDecision:
+        """Stream the GM plan's reasoning, then return the authoritative decision."""
+        decision = await self.gm_plan(view, player_input)
+        emit("gm_reasoning", decision.reasoning_summary or "")
+        return decision
+
+    async def gm_resolve_stream(self, view: GMView, player_input: str, roll, emit) -> GMDecision:
+        """Stream the GM resolution's reasoning and narration."""
+        decision = await self.gm_resolve(view, player_input, roll)
+        emit("gm_reasoning", decision.reasoning_summary or "")
+        if decision.public_narration:
+            emit("gm_narration", decision.public_narration)
+        return decision
+
+    async def actor_turn_stream(self, view: ActorView, emit) -> ActorTurn:
+        """Stream the actor's speech and intended action."""
+        performance = await self.actor_turn(view)
+        if performance.speech:
+            emit("actor_speech", performance.speech)
+        if performance.action:
+            emit("actor_action", performance.action)
+        return performance
+
+    async def gm_wrap(
+        self,
+        view: GMView,
+        player_input: str,
+        roll,
+        resolution: GMDecision,
+        performance: ActorTurn,
+    ) -> str | None:
+        """Compose the short scene continuation after the actor performed.
+
+        The default implementation adds nothing; cloud suites override this to
+        weave world/secondary-NPC reactions around the actor's own output.
+        """
+        return None
 
 
 class PydanticAISuite(AgentSuite):
@@ -83,9 +153,18 @@ class PydanticAISuite(AgentSuite):
             f"- Call a check only when consequences are genuinely uncertain; otherwise resolve "
             f"directly.\n"
             f"- Patches may be proposed only for scene, actors, or status paths, using dot "
-            f"notation, e.g. scene.public_facts or actors.mira.attributes.<name> "
-            f"(no slashes, no quotes).\n"
+            f"notation and one of the operations set/add/remove/increment (no slashes, no "
+            f"quotes). scene.public_facts and scene.hidden_facts are lists: append a fact by "
+            f"using operation add with path scene.public_facts and the fact text as new_value "
+            f"- never put fact text or an index in the path itself. Dict paths such as "
+            f"actors.<id>.attributes.<name> or status.<key> use set/increment.\n"
             f"- Keep secrets out of public narration.\n"
+            f"- public_narration is third-person scene/world narration only: environment, "
+            f"weather, sounds, and secondary NPCs (e.g. passers-by). Never write the main "
+            f"actor's dialogue or actions - the actor agent performs those.\n"
+            f"- Grant actor spotlight when the player's action targets the main actor or "
+            f"the main actor would plausibly react; skip it when the action concerns only "
+            f"the environment or secondary NPCs.\n"
             f"- The provided view already contains the full state, world facts, character cards, "
             f"and story framework.\n"
             f"Tools: use at most one tool call only when you need a detail not already in the view;"
@@ -111,6 +190,15 @@ class PydanticAISuite(AgentSuite):
             f"Audit an NPC performance. Reject control of the player, claimed world outcomes, "
             f"use of unavailable knowledge, or conflict with spotlight scope. Be concise. {lang}",
         )
+        self.wrap = make(
+            "gm",
+            str,
+            f"You are a fair TRPG game master writing a short scene continuation. "
+            f"Compose third-person narration about how the world, environment, or secondary "
+            f"NPCs react around the main actor's performance. Never rewrite the main actor's "
+            f"speech or actions. Return only the narration text; return an empty string if "
+            f"nothing is needed. {lang}",
+        )
 
     def _run_gm(self, agent, prompt: str, view: GMView):
         deps = GMDocDeps(registry=build_registry(view.state), state=view.state)
@@ -120,10 +208,36 @@ class PydanticAISuite(AgentSuite):
             agent.run(
                 prompt,
                 deps=deps,
-                usage_limits=UsageLimits(request_limit=10),
+                usage_limits=UsageLimits(request_limit=GM_REQUEST_LIMIT),
             ),
             deps,
         )
+
+    async def _run_gm_stream(
+        self,
+        agent,
+        prompt: str,
+        view: GMView,
+        emit,
+        fields: tuple[tuple[str, str], ...],
+    ):
+        """Run an agent with streaming partial outputs and return the typed result."""
+        deps = GMDocDeps(registry=build_registry(view.state), state=view.state)
+        from pydantic_ai.usage import UsageLimits
+
+        emitter = TokenEmitter(emit)
+        async with agent.run_stream(
+            prompt,
+            deps=deps,
+            usage_limits=UsageLimits(request_limit=GM_REQUEST_LIMIT),
+        ) as stream:
+            async for partial in stream.stream_output(debounce_by=0.0):
+                for attr, channel in fields:
+                    value = getattr(partial, attr, None)
+                    if isinstance(value, str):
+                        emitter.emit(channel, value)
+            output = await stream.get_output()
+        return output, deps
 
     def drain_tool_calls(self) -> list[dict]:
         calls, self._pending_tool_calls = self._pending_tool_calls, []
@@ -132,7 +246,7 @@ class PydanticAISuite(AgentSuite):
     async def gm_plan(self, view, player_input):
         prompt = (
             "State and private GM view:\n"
-            + view.model_dump_json()
+            + compact_gm_view(view)
             + "\nPlayer action:\n"
             + player_input
             + "\nDecide whether a check is needed. If no check is needed, resolve directly."
@@ -142,11 +256,29 @@ class PydanticAISuite(AgentSuite):
         self._pending_tool_calls.extend(deps.calls)
         return result.output
 
+    async def gm_plan_stream(self, view, player_input, emit):
+        prompt = (
+            "State and private GM view:\n"
+            + compact_gm_view(view)
+            + "\nPlayer action:\n"
+            + player_input
+            + "\nDecide whether a check is needed. If no check is needed, resolve directly."
+        )
+        output, deps = await self._run_gm_stream(
+            self.gm,
+            prompt,
+            view,
+            emit,
+            (("reasoning_summary", "gm_reasoning"),),
+        )
+        self._pending_tool_calls.extend(deps.calls)
+        return output
+
     async def gm_resolve(self, view, player_input, roll):
         roll_text = roll.model_dump_json() if roll else "No check was required."
         prompt = (
             "State and private GM view:\n"
-            + view.model_dump_json()
+            + compact_gm_view(view)
             + "\nPlayer action:\n"
             + player_input
             + "\nAuthoritative roll:\n"
@@ -159,9 +291,73 @@ class PydanticAISuite(AgentSuite):
         self._pending_tool_calls.extend(deps.calls)
         return result.output
 
+    async def gm_resolve_stream(self, view, player_input, roll, emit):
+        roll_text = roll.model_dump_json() if roll else "No check was required."
+        prompt = (
+            "State and private GM view:\n"
+            + compact_gm_view(view)
+            + "\nPlayer action:\n"
+            + player_input
+            + "\nAuthoritative roll:\n"
+            + roll_text
+            + "\nResolve without altering the roll. If an actor should react, grant actor "
+            "spotlight to an existing actor ID; otherwise return player spotlight."
+        )
+        output, deps = await self._run_gm_stream(
+            self.gm,
+            prompt,
+            view,
+            emit,
+            (("reasoning_summary", "gm_reasoning"), ("public_narration", "gm_narration")),
+        )
+        self._pending_tool_calls.extend(deps.calls)
+        return output
+
     async def actor_turn(self, view):
         result = await self.actor.run(view.model_dump_json())
         return result.output
+
+    async def actor_turn_stream(self, view, emit):
+        emitter = TokenEmitter(emit)
+        from pydantic_ai.usage import UsageLimits
+
+        async with self.actor.run_stream(
+            view.model_dump_json(),
+            usage_limits=UsageLimits(request_limit=ACTOR_REQUEST_LIMIT),
+        ) as stream:
+            async for partial in stream.stream_output(debounce_by=0.0):
+                for attr, channel in (("speech", "actor_speech"), ("action", "actor_action")):
+                    value = getattr(partial, attr, None)
+                    if isinstance(value, str):
+                        emitter.emit(channel, value)
+            output = await stream.get_output()
+        return output
+
+    async def gm_wrap(self, view, player_input, roll, resolution, performance):
+        roll_text = roll.model_dump_json() if roll else "No check was required."
+        prompt = (
+            "State and private GM view:\n"
+            + compact_gm_view(view)
+            + "\nPlayer action:\n"
+            + player_input
+            + "\nAuthoritative roll:\n"
+            + roll_text
+            + "\nGM scene resolution so far:\n"
+            + (resolution.public_narration or "(none)")
+            + "\nMain actor performance (produced by the actor agent):\n"
+            + performance.model_dump_json()
+            + "\nWrite ONLY a short third-person scene continuation: how the world, "
+            "environment, or secondary NPCs react around the actor's performance. Do NOT "
+            "rewrite the main actor's speech or actions. Return plain narration text; if "
+            "nothing is needed, return an empty string."
+        )
+        from pydantic_ai.usage import UsageLimits
+
+        result = await self.wrap.run(
+            prompt, usage_limits=UsageLimits(request_limit=WRAP_REQUEST_LIMIT)
+        )
+        text = (result.output or "").strip()
+        return text or None
 
     async def audit(self, view, turn):
         prompt = (

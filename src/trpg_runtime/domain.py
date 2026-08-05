@@ -134,6 +134,18 @@ class StoryFramework(BaseModel):
     possible_endings: list[str] = Field(default_factory=list)
 
 
+class CampaignRules(BaseModel):
+    """Per-campaign rules configuration.
+
+    ``custom_rules``, when non-empty, fully replaces the preset text used in
+    the GM's rules document.  The deterministic dice engine remains unchanged
+    in v1 (2d6, PbtA bands); rules text only guides GM adjudication.
+    """
+
+    ruleset_id: str = "pbta-minimal"
+    custom_rules: str = ""
+
+
 class CampaignState(BaseModel):
     campaign_id: str
     title: str
@@ -147,6 +159,7 @@ class CampaignState(BaseModel):
     story_framework: StoryFramework
     spotlight: SpotlightToken
     status: Literal["active", "paused", "completed"] = "active"
+    rules: CampaignRules = Field(default_factory=CampaignRules)
     version: int = 0
 
 
@@ -179,6 +192,7 @@ class TurnResult(BaseModel):
     player_input: str
     roll: RollResult | None = None
     gm_narration: str | None = None
+    gm_wrap_narration: str | None = None
     actor_speech: str | None = None
     actor_action: str | None = None
     debug: dict[str, Any] = Field(default_factory=dict)

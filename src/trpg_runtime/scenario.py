@@ -4,6 +4,7 @@ import yaml
 
 from .domain import (
     ActorState,
+    CampaignRules,
     CampaignState,
     PlayerState,
     SceneState,
@@ -14,21 +15,23 @@ from .domain import (
 from .i18n import DEFAULT_LOCALE
 
 
-def load_scenario(
-    path: str | Path,
+def load_scenario_doc(
+    d: dict,
     campaign_id: str | None = None,
     seed: int | None = None,
     lang: str | None = None,
 ):
-    """Load a scenario. New-style files carry a ``localizations`` section keyed
-    by locale code; old-style single-locale files are treated as English."""
-    with Path(path).open(encoding="utf-8") as f:
-        d = yaml.safe_load(f)
+    """Build a campaign state from a parsed scenario document.
+
+    New-style documents carry a ``localizations`` section keyed by locale
+    code; old-style single-locale documents are treated as English.  An
+    optional root ``rules`` block configures the campaign's ruleset.
+    """
     if "localizations" in d:
         locale = lang or d.get("default_locale", DEFAULT_LOCALE)
         if locale not in d["localizations"]:
             raise ValueError(
-                f"locale {locale!r} is not available in {path}; "
+                f"locale {locale!r} is not available in this scenario; "
                 f"available locales: {sorted(d['localizations'])}"
             )
         content = d["localizations"][locale]
@@ -36,7 +39,7 @@ def load_scenario(
         locale = lang or DEFAULT_LOCALE
         if locale != DEFAULT_LOCALE:
             raise ValueError(
-                f"scenario {path} has no localizations section; only "
+                f"scenario has no localizations section; only "
                 f"{DEFAULT_LOCALE!r} is available"
             )
         content = d
@@ -54,6 +57,7 @@ def load_scenario(
         player=PlayerState(**content["player"]),
         actors={actor.actor_id: actor},
         story_framework=StoryFramework(**content["story_framework"]),
+        rules=CampaignRules(**(d.get("rules") or {})),
         spotlight=SpotlightToken(
             owner_type=SpotlightOwner.PLAYER,
             owner_id=content["player"]["player_id"],
@@ -62,3 +66,15 @@ def load_scenario(
             reason="campaign start",
         ),
     )
+
+
+def load_scenario(
+    path: str | Path,
+    campaign_id: str | None = None,
+    seed: int | None = None,
+    lang: str | None = None,
+):
+    """Load a scenario file into a campaign state."""
+    with Path(path).open(encoding="utf-8") as f:
+        d = yaml.safe_load(f)
+    return load_scenario_doc(d, campaign_id=campaign_id, seed=seed, lang=lang)

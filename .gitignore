@@ -7,3 +7,4 @@ runtime-data/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+.tmp-browser-driver.mjs

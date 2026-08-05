@@ -112,6 +112,26 @@ trpg replay CAMPAIGN_ID
 
 Data is stored in `runtime-data/trpg.db` by default. Override it with `TRPG_DB_PATH`.
 
+## Web 控制台 | Web console
+
+`trpg web` 启动一个本机 Web 控制台（FastAPI + 无构建原生前端），一条命令即可浏览素材、组合战役并游玩：
+
+```bash
+trpg web                        # http://127.0.0.1:8765
+trpg web --port 9000 --no-open  # 指定端口且不自动打开浏览器
+```
+
+支持：
+
+- 素材库：自动扫描 `examples/`、`materials/foreverse/`、`runtime-data/resources/`，可用 `TARI_RESOURCE_DIRS` 追加素材目录；网页可直接上传角色卡（PNG/JSON）、世界观（JSON）、剧本（YAML）。角色卡指狭义的单角色设定（如「墨笔」）；多 NPC 世界卡与独立世界书统一归入「世界观」并自动去重，避免同一世界重复出现。
+- 组合器：自由组合剧本、角色卡、世界观、规则预设/自定义规则文本，创建前实时预览。
+- 游玩页：完整回复 + 阶段进度提示（GM 思考中/掷骰等）、骰子徽章、GM 视图开关；Token 级流式输出暂缓，后续再启用。
+- 设置页：编辑 `config/agents.yaml` 的模型与 Agent 参数；API key 状态只读（仍放在 `.env`）。
+
+默认只监听 `127.0.0.1`，不做鉴权。`--host 0.0.0.0` 可让局域网访问，但会暴露控制台与战役数据，请自行评估风险。
+
+`trpg web` starts a local web console with a no-build frontend: browse resources, compose campaigns, and play in the browser. It listens on `127.0.0.1` by default without authentication; `--host 0.0.0.0` exposes the console to the LAN at your own risk.
+
 ## 角色卡导入 | Character card import
 
 支持导入 SillyTavern 生态的 Character Card V2/V3（PNG 或 JSON 文件），自动映射为可游玩的场景：

@@ -1,0 +1,91 @@
+{
+  "name": "晚孤市 lorebook",
+  "description": "Extracted from a Foreverse character card; import with `trpg new --world-info`.",
+  "scan_depth": 4,
+  "entries": {
+    "0": {
+      "uid": 0,
+      "key": [],
+      "keysecondary": [],
+      "comment": "夜市法则·总纲",
+      "content": "【世界规则之书】①摊主记得所有客人，不记得自己生前是谁；问\"你是谁\"第二遍，整条巷灯暗一秒。②门票是一句真话，灯花爆=真话，不爆=假话，灯婆不逼票但记账（欠票会在后续夜晚被温柔追讨）。③夜市获得之物，醒来后以另一种形态出现在现实（糖水蛋→楼下早餐店新菜、旧怀表→抽屉里多出的照片）。④营业 0:00-5:00，\"你醒来\"即打烊。⑤夜市会呼吸：真话多则巷子变长摊位变多，假话多则灯一盏盏熄。此纲常驻注入，每轮只体现一条，禁止一次倒完。",
+      "constant": true,
+      "selective": false,
+      "order": 340,
+      "position": "before_char",
+      "disable": false,
+      "caseSensitive": false,
+      "matchWholeWords": false,
+      "scanDepth": 4,
+      "sticky": false,
+      "cooldown": 0,
+      "delay": 0
+    },
+    "1": {
+      "uid": 1,
+      "key": [
+        "灯婆",
+        "阿肆",
+        "无面先生",
+        "邮差鸦",
+        "生前",
+        "身世"
+      ],
+      "keysecondary": [],
+      "comment": "摊主NPC人物档案·生前线",
+      "content": "四位常驻摊主的\"不记得\"各有来处（仅作剧情暗线，禁止摊主自知）：灯婆生前是守了四十年巷口的传达室阿婆，最后一个没等到的人是走失的孙女；阿肆生前是给亡妻学做菜的鳏夫，锅是妻子的嫁妆；无面先生生前是替人写了一辈子悼词的先生，讲错细节的那次是在讲自己；邮差鸦是一封没送达的信变的，信封上的地址被雨泡烂了。{{user}} 拼出任一摊主的完整生前故事时，该摊主会获得\"一夜的记得\"——次日忘光，但巷子会为此亮整夜。此为全卡最深的治愈主线，每条最快十夜级推进。",
+      "constant": false,
+      "selective": false,
+      "order": 260,
+      "position": "before_char",
+      "disable": false,
+      "caseSensitive": false,
+      "matchWholeWords": false,
+      "scanDepth": 4,
+      "sticky": false,
+      "cooldown": 0,
+      "delay": 0
+    },
+    "2": {
+      "uid": 2,
+      "key": [
+        "随机摊",
+        "开摊",
+        "新摊",
+        "逛夜市"
+      ],
+      "keysecondary": [],
+      "comment": "随机摊位池",
+      "content": "每晚随机刷新 1-3 摊（$逛夜市 时从池中抽取）：解梦摊（付一个秘密，解一个梦）、旧歌摊（哼两句跑调的，还你完整的一首）、道歉代写摊（代写说不出口的道歉，收件人梦里收到）、失物招领摊（找回\"弄丢的勇气\"这类抽象物）、傀儡戏摊（重演你选的一段旧事，可改一句台词）、糖画摊（画你最想留住的瞬间）。每摊自带一个小规则和一个小代价，摊主口癖不得与常驻四摊重复。",
+      "constant": false,
+      "selective": false,
+      "order": 250,
+      "position": "before_char",
+      "disable": false,
+      "caseSensitive": false,
+      "matchWholeWords": false,
+      "scanDepth": 4,
+      "sticky": false,
+      "cooldown": 0,
+      "delay": 0
+    },
+    "3": {
+      "uid": 3,
+      "key": [],
+      "keysecondary": [],
+      "comment": "$逛夜市 · 功能模块",
+      "content": "当 {{user}} 输入 $逛夜市 时：暂停剧情，禁止正文，仅输出「今夜开摊」列表（灯笼暖橙卡片 HTML：常驻四摊状态 + 随机摊 1-3 个 + 各附一句吆喝）。$查看居民证 输出居民证面板（已付真话/持有物/未取的货/欠票）。$打烊 输出本夜小结并存档，已打烊记录禁改。输出完毕等待下一步指令。",
+      "constant": true,
+      "selective": false,
+      "order": 210,
+      "position": "before_char",
+      "disable": false,
+      "caseSensitive": false,
+      "matchWholeWords": false,
+      "scanDepth": 4,
+      "sticky": false,
+      "cooldown": 0,
+      "delay": 0
+    }
+  }
+}

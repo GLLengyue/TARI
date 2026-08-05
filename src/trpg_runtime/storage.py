@@ -111,6 +111,37 @@ class EventStore:
             ).fetchone()
         return TurnResult.model_validate_json(row[0]) if row else None
 
+    def list_campaigns(self) -> list[dict[str, Any]]:
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT campaign_id, state_json, updated_at FROM snapshots "
+                "ORDER BY updated_at DESC"
+            ).fetchall()
+        campaigns: list[dict[str, Any]] = []
+        for campaign_id, state_json, updated_at in rows:
+            try:
+                state = json.loads(state_json)
+            except json.JSONDecodeError:
+                continue
+            campaigns.append(
+                {
+                    "campaign_id": campaign_id,
+                    "title": state.get("title", campaign_id),
+                    "locale": state.get("locale", "en"),
+                    "turn_number": state.get("turn_number", 0),
+                    "status": state.get("status", "active"),
+                    "updated_at": updated_at,
+                }
+            )
+        return campaigns
+
+    def has_campaign(self, campaign_id: str) -> bool:
+        with self.connect() as c:
+            row = c.execute(
+                "SELECT 1 FROM snapshots WHERE campaign_id=?", (campaign_id,)
+            ).fetchone()
+        return row is not None
+
 
 class TurnTransaction:
     """Collects one turn's events and commits them atomically.

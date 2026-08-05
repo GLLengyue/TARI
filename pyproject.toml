@@ -23,6 +23,9 @@ dependencies = [
   "PyYAML>=6.0",
   "typer>=0.12",
   "rich>=13.7",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +36,9 @@ trpg = "trpg_runtime.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trpg_runtime"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/trpg_runtime/web/static" = "trpg_runtime/web/static"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

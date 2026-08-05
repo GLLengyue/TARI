@@ -74,6 +74,32 @@ def test_add_patch_to_non_list_raises():
         apply_patches(state, [patch])
 
 
+def test_non_numeric_list_index_raises_rule_violation():
+    state = load_scenario("examples/station_zero.yaml")
+    patch = StatePatch(
+        operation="set",
+        path="scene.public_facts.已付真话",
+        new_value="x",
+        reason="bad path",
+        proposed_by="gm",
+    )
+    with pytest.raises(RuleViolation, match="list index"):
+        apply_patches(state, [patch])
+
+
+def test_out_of_range_list_index_raises_rule_violation():
+    state = load_scenario("examples/station_zero.yaml")
+    patch = StatePatch(
+        operation="set",
+        path="scene.public_facts.999",
+        new_value="x",
+        reason="bad path",
+        proposed_by="gm",
+    )
+    with pytest.raises(RuleViolation, match="list index"):
+        apply_patches(state, [patch])
+
+
 def test_spotlight_is_enforced():
     state = load_scenario("examples/station_zero.yaml")
     with pytest.raises(RuleViolation):
