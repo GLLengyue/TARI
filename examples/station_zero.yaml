@@ -1,0 +1,99 @@
+campaign_id: station-zero
+seed: 184729
+default_locale: en
+localizations:
+  en:
+    title: Station Zero
+    opening: |
+      Rain falls through the station's broken roof. Only one monitor in the control room
+      still flickers. Mira stands beside the console, her right hand never leaving the
+      service key at her belt.
+    scene:
+      scene_id: control-room
+      title: Abandoned Control Room
+      location: Station Zero control room
+      public_facts:
+        - The monitoring system stopped recording at 23:14.
+        - Unknown footsteps can occasionally be heard in the corridor.
+      hidden_facts:
+        - The final maintenance-log page was replaced.
+        - The monitoring failure was caused by deliberate human intervention.
+    player:
+      player_id: player
+      name: Investigator
+      description: An independent investigator trapped inside Station Zero.
+    actor:
+      actor_id: mira
+      name: Mira
+      description: A former station security officer who is guarded and observant.
+      goals:
+        - Leave the station alive.
+        - Conceal how much she knows until she trusts the player.
+      knowledge:
+        - fact_id: monitoring_tampered
+          content: The monitoring system was deliberately tampered with.
+          confidence: 1.0
+          source: prior investigation
+      secrets:
+        - Mira inspected the dead camera feed before the player arrived.
+    story_framework:
+      premise: Discover why Station Zero's monitoring system failed and decide whether to trust Mira.
+      required_beats:
+        - The player learns the outage was not an ordinary accident.
+      optional_beats:
+        - The player discovers the replaced maintenance-log page.
+        - Mira's trust in the player changes.
+      forbidden_revelations:
+        - The saboteur's identity must not be revealed in this MVP scene.
+      possible_endings:
+        - The player and Mira leave together.
+        - The player enters the corridor alone.
+        - The player remains to restore monitoring.
+        - Distrust separates the pair.
+  zh:
+    title: 零号空间站
+    opening: |
+      雨水透过空间站破损的顶棚落下。控制室里只剩一台显示器还在闪烁。
+      Mira 站在控制台旁，右手始终没有离开腰间的工作钥匙。
+    scene:
+      scene_id: control-room
+      title: 废弃控制室
+      location: 零号空间站控制室
+      public_facts:
+        - 监控系统在 23:14 停止记录。
+        - 走廊里偶尔能听到不明的脚步声。
+      hidden_facts:
+        - 最后的维护日志页面被人替换过。
+        - 监控故障是人为干预造成的。
+    player:
+      player_id: player
+      name: 调查员
+      description: 被困在零号空间站内的独立调查员。
+    actor:
+      actor_id: mira
+      name: Mira
+      description: 前空间站安保人员，警惕而善于观察。
+      goals:
+        - 活着离开空间站。
+        - 在信任玩家之前，隐藏自己知道多少。
+      knowledge:
+        - fact_id: monitoring_tampered
+          content: 监控系统是被人故意篡改的。
+          confidence: 1.0
+          source: 之前的调查
+      secrets:
+        - Mira 在玩家到来之前就查看过已损坏的摄像头画面。
+    story_framework:
+      premise: 查明零号空间站监控系统为何故障，并决定是否信任 Mira。
+      required_beats:
+        - 玩家得知停电并非普通事故。
+      optional_beats:
+        - 玩家发现被替换的维护日志页面。
+        - Mira 对玩家的信任发生变化。
+      forbidden_revelations:
+        - 本 MVP 场景中不得揭示破坏者的身份。
+      possible_endings:
+        - 玩家与 Mira 一同离开。
+        - 玩家独自进入走廊。
+        - 玩家留下修复监控。
+        - 两人因不信任而分道扬镳。

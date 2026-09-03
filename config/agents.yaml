@@ -1,0 +1,24 @@
+models:
+  gm_model:
+    model_id: deepseek:deepseek-chat
+  actor_model:
+    model_id: deepseek:deepseek-chat
+  auditor_model:
+    model_id: deepseek:deepseek-chat
+
+agents:
+  gm:
+    model: gm_model
+    temperature: 0.3
+    max_output_tokens: 1000
+    retries: 2
+  actor:
+    model: actor_model
+    temperature: 0.85
+    max_output_tokens: 600
+    retries: 2
+  auditor:
+    model: auditor_model
+    temperature: 0.0
+    max_output_tokens: 400
+    retries: 1

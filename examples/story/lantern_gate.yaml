@@ -1,0 +1,255 @@
+schema_version: 1
+story_id: lantern-gate
+title: The Lantern Gate
+locale: en
+opening: >-
+  At dusk, the old city gate opens for the first time in twelve years. A blue
+  lantern burns above the arch, and someone inside is waiting for a name that
+  is not yours.
+source:
+  kind: handcrafted
+  label: TARI Story Mode vertical slice
+  source_refs:
+    - example:lantern-gate
+entities:
+  - entity_id: player
+    name: The visitor
+    kind: player
+    description: An outsider carrying a sealed letter.
+  - entity_id: warden
+    name: Warden Ilyan
+    kind: character
+    description: The gate warden who remembers the old order.
+  - entity_id: archivist
+    name: The archivist
+    kind: character
+    description: A keeper of records beneath the city.
+relationships:
+  - relationship_id: visitor-warden
+    source_entity_id: player
+    target_entity_id: warden
+    label: trust
+    value: 0
+canon_facts:
+  - fact_id: gate-seal
+    content: The blue lantern is a signal used by the vanished gate order.
+    source_refs:
+      - example:lantern-gate
+    visibility: public
+  - fact_id: missing-name
+    content: The sealed letter contains the name erased from the city register.
+    source_refs:
+      - example:lantern-gate
+    visibility: player
+  - fact_id: buried-oath
+    content: The archivist swore to protect the erased name, whatever the cost.
+    source_refs:
+      - example:lantern-gate
+    visibility: character
+  - fact_id: final-author-secret
+    content: The gate was opened by someone inside the council.
+    source_refs:
+      - example:lantern-gate
+    visibility: author_only
+plot_arcs:
+  - arc_id: return
+    title: Return to the Gate
+    summary: The visitor chooses whether to enter the city and whom to trust.
+    beat_ids:
+      - arrival
+      - courtyard
+      - archive
+      - undercroft
+      - dawn
+story_beats:
+  - beat_id: arrival
+    arc_id: return
+    title: The blue lantern
+    location: Old city gate
+    present_entities:
+      - player
+      - warden
+    dramatic_goal: Decide whether to answer the warden's challenge.
+    pressure: The gate will close before the last light fades.
+    available_clues:
+      - gate-seal
+    narrative: >-
+      Warden Ilyan lowers his spear but does not step aside. The blue lantern
+      paints the rain in cold color. He asks for the name written on the letter.
+    source_refs:
+      - example:lantern-gate:arrival
+    choices:
+      - choice_id: trust
+        text: Show the warden the sealed letter.
+        risk: medium
+        next_beat_id: courtyard
+        narrative_hint: The warden sees the seal and lets a fraction of his suspicion fall away.
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: 1
+            reason: The visitor offers a sign of good faith.
+        reveal_fact_ids:
+          - gate-seal
+      - choice_id: hide
+        text: Hide the letter and ask who sent the signal.
+        risk: high
+        next_beat_id: courtyard
+        narrative_hint: The warden's hand tightens on the spear; the first step inside is already a lie.
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: -1
+            reason: The visitor withholds the obvious proof.
+  - beat_id: courtyard
+    arc_id: return
+    title: The silent courtyard
+    location: Inner gate courtyard
+    present_entities:
+      - player
+      - warden
+    dramatic_goal: Find a safe route before the gate order notices the visitor.
+    pressure: Bells are counting down somewhere beyond the walls.
+    available_clues:
+      - missing-name
+    narrative: >-
+      The gate shuts behind you without a sound. In the courtyard, every statue
+      faces the same sealed archive door. Ilyan points toward it, then toward a
+      narrow alley where the bells cannot reach.
+    source_refs:
+      - example:lantern-gate:courtyard
+    choices:
+      - choice_id: follow
+        text: Follow Ilyan toward the sealed archive.
+        risk: medium
+        next_beat_id: archive
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: 1
+            reason: The visitor accepts the warden's lead.
+      - choice_id: leave
+        text: Take the silent alley and avoid the archive.
+        risk: high
+        next_beat_id: alley
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: -1
+            reason: The visitor abandons the only guide.
+  - beat_id: archive
+    arc_id: return
+    title: The erased register
+    location: Sealed archive
+    present_entities:
+      - player
+      - archivist
+    dramatic_goal: Learn why the letter was removed from the city record.
+    pressure: The archive will remember anyone who reads the forbidden page.
+    available_clues:
+      - missing-name
+      - buried-oath
+    narrative: >-
+      Beneath the archive, the register opens to a page scraped nearly blank.
+      The archivist waits beside it with a candle cupped in both hands. One line
+      remains: a name, and beneath it an oath written in a different ink.
+    source_refs:
+      - example:lantern-gate:archive
+    choices:
+      - choice_id: read
+        text: Read the remaining name aloud.
+        risk: high
+        next_beat_id: undercroft
+        narrative_hint: The erased name answers from somewhere below the floor.
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: 1
+            reason: The visitor shares the recovered truth.
+        reveal_fact_ids:
+          - buried-oath
+      - choice_id: close
+        text: Close the register and protect the name.
+        risk: medium
+        next_beat_id: undercroft
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: 1
+            reason: The visitor chooses protection over certainty.
+  - beat_id: undercroft
+    arc_id: return
+    title: The oath below
+    location: Archive undercroft
+    present_entities:
+      - player
+      - archivist
+    dramatic_goal: Decide what to do with the oath before the city wakes.
+    pressure: The first bell will expose everyone still below the archive.
+    available_clues:
+      - buried-oath
+    narrative: >-
+      A stair opens beneath the register. At its foot, the archivist places the
+      letter beside an empty stone niche. The oath is not a promise to the city;
+      it is a promise to the person whose name was erased.
+    source_refs:
+      - example:lantern-gate:undercroft
+    choices:
+      - choice_id: open
+        text: Break the seal and accept the oath.
+        risk: high
+        next_beat_id: dawn
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: 1
+            reason: The visitor accepts responsibility for the hidden name.
+      - choice_id: run
+        text: Take the letter and run before the first bell.
+        risk: high
+        next_beat_id: alley
+        effects:
+          - operation: increment
+            path: variables.trust
+            value: -2
+            reason: The visitor chooses survival over the oath.
+  - beat_id: alley
+    arc_id: return
+    title: The road outside
+    location: Outer city road
+    present_entities:
+      - player
+    dramatic_goal: Escape with whatever truth can be carried.
+    pressure: The blue lantern has gone dark behind you.
+    narrative: >-
+      You reach the road as the first bell breaks the dusk. Behind you, the
+      lantern dies. The city keeps its erased name, but the letter is still warm
+      in your hand.
+    source_refs:
+      - example:lantern-gate:alley
+    terminal: true
+  - beat_id: dawn
+    arc_id: return
+    title: A name restored
+    location: Old city gate at dawn
+    present_entities:
+      - player
+      - warden
+      - archivist
+    dramatic_goal: Carry the restored name into a city that has forgotten it.
+    pressure: The council will ask who opened the gate.
+    narrative: >-
+      At dawn, the blue lantern burns gold. Ilyan opens the gate for the first
+      time in twelve years, and the archivist writes the erased name back into
+      the register. The city has not forgiven the truth, but it can no longer
+      pretend the truth was never there.
+    source_refs:
+      - example:lantern-gate:dawn
+    terminal: true
+style_profile:
+  language: en
+  point_of_view: second_person
+  tone: restrained_mystery
+  constraints:
+    - Keep each segment focused on one dramatic beat.
+    - Do not reveal author_only facts.
