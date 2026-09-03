@@ -27,16 +27,19 @@ from .lorebook import apply_world_info, world_info_from_state
 from .narrative import (
     CanonPolicy,
     FakeNarrativeAuthor,
+    NarrativeAuthor,
     NarrativeInput,
+    OpenAINarrativeAuthor,
     NarrativeOrchestrator,
     PlayerIdentity,
+    StorySessionState,
     StoryStore,
 )
 from .rules import apply_patches
 from .runtime import TurnOrchestrator
 from .scenario import load_scenario
 from .storage import EventStore
-from .story import load_bundle, parse_source, scaffold_bundle, write_bundle
+from .story import SourceDocument, StoryBundle, load_bundle
 
 app = typer.Typer(help="Agentic TRPG Runtime")
 console = Console()
@@ -256,6 +259,74 @@ def _story_input_from_text(state, text: str) -> NarrativeInput:
     return NarrativeInput(text=text, input_mode="freeform")
 
 
+def _story_author(kind: str) -> NarrativeAuthor:
+    normalized = kind.strip().lower()
+    if normalized == "fake":
+        return FakeNarrativeAuthor()
+    if normalized == "llm":
+        return OpenAINarrativeAuthor()
+    raise typer.BadParameter("author must be either 'fake' or 'llm'")
+
+
+def import_bundle(
+    source: str,
+    output: str | None = None,
+    story_id: str | None = None,
+    title: str | None = None,
+    lang: str = "en",
+    max_chapters: int | None = None,
+) -> tuple[Path, SourceDocument, StoryBundle]:
+    """Thin Typer wrapper around :func:`narrative.workflow.import_bundle`."""
+    from .narrative.workflow import import_bundle as _import_bundle
+
+    return _import_bundle(
+        source,
+        output=output,
+        story_id=story_id,
+        title=title,
+        lang=lang,
+        max_chapters=max_chapters,
+    )
+
+
+def create_session(
+    bundle_path: str,
+    session_id: str | None = None,
+    identity: PlayerIdentity | None = None,
+    canon_policy: str = "guided",
+    author: NarrativeAuthor | None = None,
+    store: StoryStore | None = None,
+    seed: int = 0,
+) -> tuple[StoryBundle, StorySessionState]:
+    """Thin Typer wrapper around :func:`narrative.workflow.create_session`."""
+    from .narrative.workflow import create_session as _create_session
+
+    return _create_session(
+        bundle_path,
+        session_id=session_id,
+        identity=identity,
+        canon_policy=canon_policy,
+        author=author,
+        store=store,
+        seed=seed,
+    )
+
+
+def branch_session(
+    session_id: str,
+    branch_id: str,
+    *,
+    from_branch: str = "main",
+    store: StoryStore | None = None,
+) -> StorySessionState:
+    """Thin Typer wrapper around :func:`narrative.workflow.branch_session`."""
+    from .narrative.workflow import branch_session as _branch_session
+
+    return _branch_session(
+        session_id, branch_id, from_branch=from_branch, store=store
+    )
+
+
 @app.command("story-import")
 def story_import(
     source: str,
@@ -267,16 +338,14 @@ def story_import(
 ):
     """Compile a TXT/Markdown source into a source-preserving Story Bundle scaffold."""
     try:
-        document = parse_source(
+        output_path, document, bundle = import_bundle(
             source,
-            source_id=story_id,
+            output=output,
+            story_id=story_id,
             title=title,
-            locale=lang,
+            lang=lang,
             max_chapters=max_chapters,
         )
-        bundle = scaffold_bundle(document, story_id=story_id, title=title)
-        output_path = Path(output or (bundle.story_id + ".yaml"))
-        write_bundle(output_path, bundle)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"Story Bundle written: [bold]{output_path}[/bold]")
@@ -301,7 +370,6 @@ def story_new(
     canon_policy: str = "guided",
 ):
     """Create an offline interactive-narrative session from a Story Bundle."""
-    story_bundle = load_bundle(bundle)
     try:
         identity = PlayerIdentity(
             display_name=player_name,
@@ -311,16 +379,12 @@ def story_new(
         )
     except ValueError as exc:
         raise typer.BadParameter(f"invalid player identity: {exc}") from exc
-    runtime = NarrativeOrchestrator(
-        story_store(), story_bundle, FakeNarrativeAuthor()
-    )
-    state = asyncio.run(
-        runtime.start_session(
-            identity,
-            session_id=session_id,
-            seed=seed,
-            canon_policy=_story_policy(canon_policy),
-        )
+    story_bundle, state = create_session(
+        bundle,
+        session_id=session_id,
+        identity=identity,
+        canon_policy=_story_policy(canon_policy),
+        seed=seed,
     )
     console.print(Panel(_story_prompt(story_bundle, state), title=state.title))
     console.print(
@@ -333,15 +397,24 @@ def story_new(
 
 
 @app.command("story-play")
-def story_play(bundle: str, session_id: str, branch_id: str = "main"):
-    """Play a Story Bundle session with the deterministic offline author."""
+def story_play(
+    bundle: str,
+    session_id: str,
+    branch_id: str = "main",
+    author: str = typer.Option(
+        "fake",
+        "--author",
+        help="Narrative author: fake (offline) or llm (OpenAI-compatible endpoint).",
+    ),
+):
+    """Play a Story Bundle session with a fake or OpenAI-compatible author."""
     story_bundle = load_bundle(bundle)
     s = story_store()
     try:
         state = s.load_story_snapshot(session_id, branch_id)
     except KeyError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    runtime = NarrativeOrchestrator(s, story_bundle, FakeNarrativeAuthor())
+    runtime = NarrativeOrchestrator(s, story_bundle, _story_author(author))
 
     console.print(Panel(_story_prompt(story_bundle, state), title=state.title))
     _print_story_choices(state)

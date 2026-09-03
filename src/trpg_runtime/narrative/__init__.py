@@ -11,12 +11,15 @@ from .domain import (
     PlayerIdentity,
     StorySessionState,
 )
+from .providers import LLMSettings, OpenAINarrativeAuthor, resolve_llm_settings
 from .runtime import NarrativeOrchestrator
 from .storage import StoryStore
+from .workflow import branch_session, create_session, import_bundle
 
 __all__ = [
     "CanonPolicy",
     "FakeNarrativeAuthor",
+    "LLMSettings",
     "NarrativeAuthor",
     "NarrativeAuthorProposal",
     "NarrativeChoice",
@@ -24,7 +27,12 @@ __all__ = [
     "NarrativeOrchestrator",
     "NarrativeStatePatch",
     "NarrativeTurnResult",
+    "OpenAINarrativeAuthor",
     "PlayerIdentity",
     "StorySessionState",
     "StoryStore",
+    "branch_session",
+    "create_session",
+    "import_bundle",
+    "resolve_llm_settings",
 ]
