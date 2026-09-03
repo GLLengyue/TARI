@@ -24,10 +24,22 @@ from .config import load_runtime_config
 from .domain import SpotlightOwner, SpotlightToken, StatePatch
 from .i18n import DEFAULT_LOCALE, t
 from .lorebook import apply_world_info, world_info_from_state
+from .narrative import (
+    CanonPolicy,
+    FakeNarrativeAuthor,
+    NarrativeAuthor,
+    NarrativeInput,
+    OpenAINarrativeAuthor,
+    NarrativeOrchestrator,
+    PlayerIdentity,
+    StorySessionState,
+    StoryStore,
+)
 from .rules import apply_patches
 from .runtime import TurnOrchestrator
 from .scenario import load_scenario
 from .storage import EventStore
+from .story import SourceDocument, StoryBundle, load_bundle
 
 app = typer.Typer(help="Agentic TRPG Runtime")
 console = Console()
@@ -209,6 +221,258 @@ def play(campaign_id: str, debug: bool = False, fake: bool = False, progress: bo
             console.print(Panel(body, title=t(locale, "actor")))
         if debug:
             console.print_json(json.dumps(result.debug, default=str))
+
+
+def story_store() -> StoryStore:
+    return StoryStore(os.getenv("TRPG_DB_PATH", "runtime-data/trpg.db"))
+
+
+def _story_policy(value: str) -> CanonPolicy:
+    try:
+        return CanonPolicy(value)
+    except ValueError as exc:
+        choices = ", ".join(policy.value for policy in CanonPolicy)
+        raise typer.BadParameter(f"must be one of: {choices}") from exc
+
+
+def _story_prompt(bundle, state) -> str:
+    if state.turn_number == 0:
+        return state.last_narrative + "\n\n" + bundle.beat(state.current_beat_id).narrative
+    return state.last_narrative
+
+
+def _print_story_choices(state) -> None:
+    if not state.available_choices:
+        console.print("[dim]No choices are available. Type freeform text or /continue.[/dim]")
+        return
+    console.print("[bold]Choices:[/bold]")
+    for index, choice in enumerate(state.available_choices, start=1):
+        console.print(f"  {index}. [{choice.choice_id}] {choice.text} ({choice.risk})")
+
+
+def _story_input_from_text(state, text: str) -> NarrativeInput:
+    for index, choice in enumerate(state.available_choices, start=1):
+        if text == choice.choice_id or text == str(index):
+            return NarrativeInput(choice_id=choice.choice_id, input_mode="choice")
+    if text == "/continue":
+        return NarrativeInput(input_mode="continue")
+    return NarrativeInput(text=text, input_mode="freeform")
+
+
+def _story_author(kind: str) -> NarrativeAuthor:
+    normalized = kind.strip().lower()
+    if normalized == "fake":
+        return FakeNarrativeAuthor()
+    if normalized == "llm":
+        return OpenAINarrativeAuthor()
+    raise typer.BadParameter("author must be either 'fake' or 'llm'")
+
+
+def import_bundle(
+    source: str,
+    output: str | None = None,
+    story_id: str | None = None,
+    title: str | None = None,
+    lang: str = "en",
+    max_chapters: int | None = None,
+) -> tuple[Path, SourceDocument, StoryBundle]:
+    """Thin Typer wrapper around :func:`narrative.workflow.import_bundle`."""
+    from .narrative.workflow import import_bundle as _import_bundle
+
+    return _import_bundle(
+        source,
+        output=output,
+        story_id=story_id,
+        title=title,
+        lang=lang,
+        max_chapters=max_chapters,
+    )
+
+
+def create_session(
+    bundle_path: str,
+    session_id: str | None = None,
+    identity: PlayerIdentity | None = None,
+    canon_policy: str = "guided",
+    author: NarrativeAuthor | None = None,
+    store: StoryStore | None = None,
+    seed: int = 0,
+) -> tuple[StoryBundle, StorySessionState]:
+    """Thin Typer wrapper around :func:`narrative.workflow.create_session`."""
+    from .narrative.workflow import create_session as _create_session
+
+    return _create_session(
+        bundle_path,
+        session_id=session_id,
+        identity=identity,
+        canon_policy=canon_policy,
+        author=author,
+        store=store,
+        seed=seed,
+    )
+
+
+def branch_session(
+    session_id: str,
+    branch_id: str,
+    *,
+    from_branch: str = "main",
+    store: StoryStore | None = None,
+) -> StorySessionState:
+    """Thin Typer wrapper around :func:`narrative.workflow.branch_session`."""
+    from .narrative.workflow import branch_session as _branch_session
+
+    return _branch_session(
+        session_id, branch_id, from_branch=from_branch, store=store
+    )
+
+
+@app.command("story-import")
+def story_import(
+    source: str,
+    output: str | None = None,
+    story_id: str | None = None,
+    title: str | None = None,
+    lang: str = "en",
+    max_chapters: int | None = None,
+):
+    """Compile a TXT/Markdown source into a source-preserving Story Bundle scaffold."""
+    try:
+        output_path, document, bundle = import_bundle(
+            source,
+            output=output,
+            story_id=story_id,
+            title=title,
+            lang=lang,
+            max_chapters=max_chapters,
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"Story Bundle written: [bold]{output_path}[/bold]")
+    console.print(
+        f"Source: {document.title} | chapters: {len(document.chapters)} | "
+        f"compiler: {bundle.optional_rules['compiler']}"
+    )
+    console.print(
+        f"Next: trpg story-new {output_path} --session-id {bundle.story_id}-demo"
+    )
+
+
+@app.command("story-new")
+def story_new(
+    bundle: str,
+    session_id: str | None = None,
+    player_name: str = "Player",
+    identity_type: str = "visitor",
+    persona: str = "",
+    host_character: str | None = None,
+    seed: int = 0,
+    canon_policy: str = "guided",
+):
+    """Create an offline interactive-narrative session from a Story Bundle."""
+    try:
+        identity = PlayerIdentity(
+            display_name=player_name,
+            identity_type=identity_type,
+            persona=persona,
+            host_character=host_character,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(f"invalid player identity: {exc}") from exc
+    story_bundle, state = create_session(
+        bundle,
+        session_id=session_id,
+        identity=identity,
+        canon_policy=_story_policy(canon_policy),
+        seed=seed,
+    )
+    console.print(Panel(_story_prompt(story_bundle, state), title=state.title))
+    console.print(
+        f"Session created: [bold]{state.session_id}[/bold] | branch: {state.branch_id}"
+    )
+    _print_story_choices(state)
+    console.print(
+        f"Next: trpg story-play {bundle} {state.session_id} --branch-id {state.branch_id}"
+    )
+
+
+@app.command("story-play")
+def story_play(
+    bundle: str,
+    session_id: str,
+    branch_id: str = "main",
+    author: str = typer.Option(
+        "fake",
+        "--author",
+        help="Narrative author: fake (offline) or llm (OpenAI-compatible endpoint).",
+    ),
+):
+    """Play a Story Bundle session with a fake or OpenAI-compatible author."""
+    story_bundle = load_bundle(bundle)
+    s = story_store()
+    try:
+        state = s.load_story_snapshot(session_id, branch_id)
+    except KeyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    runtime = NarrativeOrchestrator(s, story_bundle, _story_author(author))
+
+    console.print(Panel(_story_prompt(story_bundle, state), title=state.title))
+    _print_story_choices(state)
+    while True:
+        if state.status == "completed":
+            console.print("[bold green]Story completed.[/bold green]")
+            break
+        text = console.input("[bold cyan]story> [/bold cyan]").strip()
+        if text in {"/quit", "/exit"}:
+            break
+        if text.startswith("/branch "):
+            new_branch_id = text.partition(" ")[2].strip()
+            try:
+                state = runtime.fork(state, new_branch_id)
+            except Exception as exc:
+                console.print(f"[red]Branch failed: {exc}[/red]")
+                continue
+            console.print(
+                f"Switched to branch [bold]{state.branch_id}[/bold] from turn {state.turn_number}."
+            )
+            _print_story_choices(state)
+            continue
+        if not text:
+            continue
+        incoming = _story_input_from_text(state, text)
+        try:
+            state, result = asyncio.run(
+                runtime.process_turn(state, incoming, request_id=str(uuid.uuid4()))
+            )
+        except Exception as exc:
+            console.print(f"[red]Story turn failed: {exc}[/red]")
+            continue
+        console.print(Panel(result.narrative, title=f"Turn {result.turn_number}"))
+        _print_story_choices(state)
+
+
+@app.command("story-branch")
+def story_branch(
+    session_id: str,
+    branch_id: str,
+    from_branch: str = "main",
+):
+    """Create a child Story Mode branch without starting a play loop."""
+    s = story_store()
+    try:
+        parent = s.load_story_snapshot(session_id, from_branch)
+        child = s.create_story_branch(parent, branch_id)
+    except (KeyError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(
+        "Created story branch [bold]"
+        + child.branch_id
+        + "[/bold] from "
+        + child.parent_branch_id
+        + " at turn "
+        + str(child.turn_number)
+        + "."
+    )
 
 
 @app.command("web")
