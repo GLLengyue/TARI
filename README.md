@@ -54,6 +54,22 @@ The MVP has no difficulty classes or modifiers.
 - 战役快照和恢复 / campaign snapshots and resume
 - 独立的 provider、model、agent YAML 配置 / independent provider, model, and agent YAML configuration
 - 不影响普通游玩的 Debug trace / debug traces outside normal play
+- Story Mode：Story Bundle、选择节拍、玩家身份、分支和原子叙事事件 / Story Mode bundles, beats, identities, branches, and atomic narrative events
+
+## 互动叙事 | Interactive narrative
+
+Story Mode 与传统 TRPG 的 `CampaignState` / `TurnOrchestrator` 分开，先用离线 Fake Author 验证“故事包 → 玩家身份 → 选择 → 状态 → 分支”的闭环。示例故事包位于 `examples/story/lantern_gate.yaml`：
+
+```bash
+trpg story-new examples/story/lantern_gate.yaml --session-id lantern-demo --player-name Ari
+trpg story-play examples/story/lantern_gate.yaml lantern-demo --author fake
+trpg story-branch lantern-demo hesitation
+trpg story-play examples/story/lantern_gate.yaml lantern-demo --branch-id hesitation --author llm
+```
+
+`story-play` 默认使用离线 Fake Author；传入 `--author llm` 会调用 `TARI_LLM_*`，未设置时回退到 `~/.evotai/evot.env` 中 evot 当前的 OpenAI-compatible provider。输入选择编号或 `choice_id` 会推进节拍；普通文本是自由行动，不会绕过选择自动推进；`/continue` 重写当前节拍；`/branch NAME` 从当前状态创建并切换到子分支；`/quit` 退出。Story Mode 使用与传统战役相同的 SQLite 文件，但事件、快照和分支表独立保存。
+
+See [Story Mode design and extension points](docs/story-mode.md) for the bundle schema, author contract, state-patch boundary, local LLM configuration, and end-to-end validation.
 
 ## 快速开始 | Quick start
 
