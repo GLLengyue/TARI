@@ -12,6 +12,7 @@ import yaml
 
 from .character_cards import detect_locale, parse_card
 from .lorebook import normalize_world_book
+from .story.bundle import load_bundle
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
@@ -125,6 +126,7 @@ class ResourceLibrary:
     - ``worlds``: a world setting — world cards (multi-NPC/scenario/simulator
       cards with their embedded lorebook) and standalone world-info books.
     - ``scenarios``: campaign/scenario documents (opening + story framework).
+    - ``stories``: validated Story Bundle files produced by ``story-compile``.
 
     World cards are deduplicated against standalone lorebooks of the same
     world, preferring the card (it carries the avatar).  Imported scenario
@@ -168,6 +170,7 @@ class ResourceLibrary:
         cards_by_stem: dict[tuple[Path, str], dict[str, Any]] = {}
         scenario_paths: list[Path] = []
         world_paths: list[Path] = []
+        story_paths: list[Path] = []
         self._world_keys: set[str] = set()
 
         for root in self.roots:
@@ -177,15 +180,18 @@ class ResourceLibrary:
                 ("scenarios", "scenarios"),
                 ("cards", "cards"),
                 ("worlds", "worlds"),
+                ("stories", "stories"),
             ):
                 sub = root / kind_dir
                 if sub.is_dir():
                     self._scan_dir(
-                        sub, kind, cards_by_stem, scenario_paths, world_paths
+                        sub, kind, cards_by_stem, scenario_paths, world_paths, story_paths
                     )
             # Auto-detect flat files directly inside the root.
             if root.is_dir():
-                self._scan_dir(root, None, cards_by_stem, scenario_paths, world_paths)
+                self._scan_dir(
+                    root, None, cards_by_stem, scenario_paths, world_paths, story_paths
+                )
 
         for (_directory, stem), entry in cards_by_stem.items():
             if entry["path"] is None:
@@ -198,6 +204,9 @@ class ResourceLibrary:
         for path in world_paths:
             self._register_world_dedup(path)
 
+        for path in story_paths:
+            self._register_story(path)
+
     def _scan_dir(
         self,
         directory: Path,
@@ -205,13 +214,16 @@ class ResourceLibrary:
         cards_by_stem: dict,
         scenario_paths: list[Path],
         world_paths: list[Path],
+        story_paths: list[Path],
     ) -> None:
         for path in sorted(directory.iterdir()):
             if not path.is_file():
                 continue
             suffix = path.suffix.lower()
             try:
-                if kind_hint == "scenarios" or (
+                if suffix in (".yaml", ".yml", ".json") and self._looks_like_story(path):
+                    story_paths.append(path)
+                elif kind_hint == "scenarios" or (
                     kind_hint is None and suffix in (".yaml", ".yml")
                 ):
                     if self._looks_like_scenario(path):
@@ -232,6 +244,13 @@ class ResourceLibrary:
                         entry["path"] = path
             except Exception as exc:  # noqa: BLE001 - one bad file must not kill the scan
                 self.warnings.append(f"{path}: {exc}")
+
+    @staticmethod
+    def _looks_like_story(path: Path) -> bool:
+        try:
+            return load_bundle(path).schema_version == 1
+        except (OSError, ValueError, yaml.YAMLError):
+            return False
 
     @staticmethod
     def _looks_like_scenario(path: Path) -> bool:
@@ -356,6 +375,30 @@ class ResourceLibrary:
                 },
             )
 
+    def _register_story(self, path: Path) -> None:
+        try:
+            bundle = load_bundle(path)
+        except Exception as exc:  # noqa: BLE001 - bad bundles must not break the scan
+            self.warnings.append(f"{path}: {exc}")
+            return
+        description = ""
+        if bundle.opening:
+            description = str(bundle.opening).strip().splitlines()[0][:300]
+        self._add(
+            "stories",
+            path,
+            bundle.title,
+            locale=bundle.locale,
+            description=description,
+            meta={
+                "story_id": bundle.story_id,
+                "beat_count": len(bundle.story_beats),
+                "entity_count": len(bundle.entities),
+                "fact_count": len(bundle.canon_facts),
+                "compiler": str(bundle.optional_rules.get("compiler") or ""),
+            },
+        )
+
     def _register_world_dedup(self, path: Path) -> None:
         book = json.loads(path.read_text(encoding="utf-8"))
         name = str(book.get("name") or path.stem)
@@ -399,6 +442,7 @@ class ResourceLibrary:
 
     def load_world_book(self, resource: Resource) -> dict[str, Any]:
         """Load a world-info book from a lorebook JSON or a world card/scenario."""
+
         if resource.meta.get("source") in ("card", "scenario"):
             card = self.load_card(resource)
             book = card.get("character_book") or {}
@@ -407,6 +451,12 @@ class ResourceLibrary:
             return normalize_world_book(book)
         book = json.loads(resource.path.read_text(encoding="utf-8"))
         return normalize_world_book(book)
+
+    def load_story_bundle(self, resource: Resource):
+        """Load a validated :class:`StoryBundle` from a story resource."""
+        from .story import load_bundle as _load_bundle
+
+        return _load_bundle(resource.path)
 
     # --- uploads ---------------------------------------------------------
 

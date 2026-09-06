@@ -5,9 +5,10 @@ import json
 import os
 import uuid
 from pathlib import Path
+from typing import Literal, cast
 
 import typer
-import yaml
+import yaml  # type: ignore[import-untyped]
 from rich.console import Console
 from rich.panel import Panel
 
@@ -29,8 +30,8 @@ from .narrative import (
     FakeNarrativeAuthor,
     NarrativeAuthor,
     NarrativeInput,
-    OpenAINarrativeAuthor,
     NarrativeOrchestrator,
+    OpenAINarrativeAuthor,
     PlayerIdentity,
     StorySessionState,
     StoryStore,
@@ -327,6 +328,95 @@ def branch_session(
     )
 
 
+def compile_bundle(
+    source: str,
+    output_dir: str | None = None,
+    *,
+    story_id: str | None = None,
+    title: str | None = None,
+    lang: str = "en",
+    max_chapters: int | None = None,
+    parallelism: int = 4,
+    chapter_chars: int = 20000,
+    window_chapters: int = 8,
+    max_arc_chapters: int = 12,
+    world_batch_chapters: int = 12,
+    volume_size: int = 40,
+    rebuild: bool = False,
+    publish_world_path: str | None = None,
+):
+    """Thin Typer wrapper around :func:`narrative.workflow.compile_bundle`."""
+    from .narrative.workflow import compile_bundle as _compile_bundle
+
+    return _compile_bundle(
+        source,
+        output_dir=output_dir,
+        story_id=story_id,
+        title=title,
+        lang=lang,
+        max_chapters=max_chapters,
+        parallelism=parallelism,
+        chapter_chars=chapter_chars,
+        window_chapters=window_chapters,
+        max_arc_chapters=max_arc_chapters,
+        world_batch_chapters=world_batch_chapters,
+        volume_size=volume_size,
+        rebuild=rebuild,
+        publish_world_path=publish_world_path,
+    )
+
+
+@app.command("story-compile")
+def story_compile(
+    source: str,
+    output_dir: str | None = typer.Option(
+        None, "--output-dir", "-o", help="Resumable compiler workspace directory."
+    ),
+    story_id: str | None = typer.Option(None, "--story-id"),
+    title: str | None = typer.Option(None, "--title"),
+    lang: str = typer.Option("en", "--lang"),
+    max_chapters: int | None = typer.Option(None, "--max-chapters"),
+    parallelism: int = typer.Option(4, "--parallelism", min=1),
+    chapter_chars: int = typer.Option(20000, "--chapter-chars", min=2000),
+    window_chapters: int = typer.Option(8, "--window-chapters", min=2),
+    max_arc_chapters: int = typer.Option(12, "--max-arc-chapters", min=1),
+    world_batch_chapters: int = typer.Option(12, "--world-batch-chapters", min=1),
+    volume_size: int = typer.Option(40, "--volume-size", min=1),
+    rebuild: bool = typer.Option(False, "--rebuild"),
+    publish_world_path: str | None = typer.Option(
+        None, "--publish-world-path", help="Copy the generated world-info JSON here."
+    ),
+):
+    """Compile TXT/Markdown source into a resumable Story Bundle workspace."""
+    try:
+        result = compile_bundle(
+            source,
+            output_dir=output_dir,
+            story_id=story_id,
+            title=title,
+            lang=lang,
+            max_chapters=max_chapters,
+            parallelism=parallelism,
+            chapter_chars=chapter_chars,
+            window_chapters=window_chapters,
+            max_arc_chapters=max_arc_chapters,
+            world_batch_chapters=world_batch_chapters,
+            volume_size=volume_size,
+            rebuild=rebuild,
+            publish_world_path=publish_world_path,
+        )
+    except (OSError, UnicodeDecodeError, ValueError, RuntimeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"Compiled Story Bundle: [bold]{result.bundle_path}[/bold]")
+    console.print(f"Workspace: {result.workspace}")
+    console.print(
+        f"Chapters: {result.chapter_count} | cards: {result.card_count} | "
+        f"arcs: {result.arc_count} | entities: {result.entity_count} | "
+        f"facts: {result.fact_count}"
+    )
+    console.print(f"World info: [bold]{result.world_info_path}[/bold]")
+
+
 @app.command("story-import")
 def story_import(
     source: str,
@@ -373,7 +463,10 @@ def story_new(
     try:
         identity = PlayerIdentity(
             display_name=player_name,
-            identity_type=identity_type,
+            identity_type=cast(
+                Literal["embody", "possess", "visitor", "replacement"],
+                identity_type,
+            ),
             persona=persona,
             host_character=host_character,
         )
@@ -468,7 +561,7 @@ def story_branch(
         "Created story branch [bold]"
         + child.branch_id
         + "[/bold] from "
-        + child.parent_branch_id
+        + (child.parent_branch_id or "main")
         + " at turn "
         + str(child.turn_number)
         + "."

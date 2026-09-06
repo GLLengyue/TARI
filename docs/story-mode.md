@@ -64,6 +64,35 @@ trpg story-import path/to/story.md --output runtime-data/story.yaml --story-id m
 trpg story-new runtime-data/story.yaml --session-id my-story-demo
 ```
 
-The generated bundle uses `optional_rules.compiler = deterministic_scaffold`, one beat per imported chapter, and a `continue` choice between chapters. A later local-model compiler can replace this scaffold while keeping the same source/evidence fields and runtime contract.
+The generated bundle uses `optional_rules.compiler = deterministic_scaffold`, one beat per imported chapter, and a `continue` choice between chapters. It is the lossless import path; it does not infer characters, plot arcs, or semantic facts.
 
-The current acceptance path is: `story-import` writes a bundle, `story-new` creates an atomic SQLite-backed session, `story-play --author llm` processes one or more choices through the configured local endpoint, and `story-branch` forks the committed snapshot without mutating the parent.
+## Compiling semantic story resources
+
+To create semantic chapter cards, rolling story arcs, world knowledge, novel structures, and a runtime-ready Story Bundle, use `story-compile` with an OpenAI-compatible local or remote endpoint configured through `TARI_LLM_*` or evot's `EVOT_LLM_*` variables:
+
+```bash
+trpg story-compile path/to/story.md \
+  --output-dir runtime-data/story-books/my-story \
+  --story-id my-story \
+  --title "My Story" \
+  --publish-world-path runtime-data/story-books/my-story/world-info.json
+```
+
+The compiler is resumable. It first asks the model for a source structure plan, then hashes the source, stores the pipeline version and settings in `manifest.json`, and caches each chapter card, arc window, world card/merge, and structure. Re-running the same command reuses valid artifacts; use `--rebuild` after intentionally changing the source or pipeline settings. `--max-chapters`, `--parallelism`, `--chapter-chars`, `--window-chapters`, `--max-arc-chapters`, `--world-batch-chapters`, and `--volume-size` control bounded work and memory use. The original source is never modified; line-numbered plans, source hashes, evidence, and failure checkpoints remain in the workspace.
+
+A workspace contains the original parsed source (`source.json`), `source_plan.json`, source-referenced chapter cards, rolling arcs, world knowledge Markdown, structure files, `bundle.yaml`, `world-info.json`, and normalized `entities.json`, `canon-facts.json`, and `relationships.json`. The generated Bundle keeps source references and evidence, while the generated world-info file is compatible with the existing TARI/SillyTavern world-info import path. The same operation is available without Typer through `trpg_runtime.narrative.compile_bundle(...)` or `trpg_runtime.story.compile_source(...)`.
+
+## Story Mode HTTP vertical slice
+
+The local Web console lists validated Story Bundles under the `stories` resource kind. The initial Story Mode API is separate from the traditional campaign API and exposes:
+
+- `GET /api/resources` — list available Story Bundles and other resources;
+- `POST /api/story/sessions` — create an atomic SQLite-backed session;
+- `GET /api/story/sessions/{session_id}` — read the current state (`branch_id` selects a branch);
+- `GET /api/story/sessions/{session_id}/events` and `/branches` — inspect event history and timelines;
+- `POST /api/story/sessions/{session_id}/turns` — process a choice, freeform action, or continue request;
+- `POST /api/story/sessions/{session_id}/branches/{branch_id}` — fork the current main-branch snapshot.
+
+Story turns use the offline fake author by default; set `fake: false` to use the configured OpenAI-compatible endpoint. A compiled bundle is discovered by the resource library when it is placed in a configured resource root, or when its workspace directory is added through `TARI_RESOURCE_DIRS`, for example `TARI_RESOURCE_DIRS=runtime-data/story-books/my-story trpg web`. This is an initial Story Mode API, not the completed SillyTavern/OpenAI-compatible client adapter from the long-term roadmap.
+
+The current acceptance path is: `story-import` writes a deterministic scaffold, `story-compile` produces resumable semantic resources, `story-new` creates an atomic SQLite-backed session, `story-play --author llm` processes a choice through the configured endpoint, `story-branch` forks the committed snapshot, and the HTTP API exposes the same state/turn/event/branch contract without mutating the parent timeline.

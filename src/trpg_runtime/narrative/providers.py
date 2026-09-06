@@ -5,8 +5,10 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .author import NarrativeAuthor
 from .domain import NarrativeAuthorProposal, NarrativeChoice, NarrativeStatePatch
@@ -77,6 +79,22 @@ def _normalise_base_url(value: str) -> str:
     if base.endswith(suffix):
         base = base[: -len(suffix)]
     return base
+
+
+def _is_local_endpoint(base_url: str) -> bool:
+    host = (urlparse(base_url).hostname or "").lower()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        return True
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return False
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+    )
 
 
 def resolve_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
@@ -185,7 +203,7 @@ def _narrative_from_content(text: str) -> str:
     except ValueError:
         cleaned = _THINK_RE.sub("", text).strip().strip("`").strip()
         if not cleaned:
-            raise ValueError("author returned empty narrative")
+            raise ValueError("author returned empty narrative") from None
         return cleaned
     narrative = str(payload.get("narrative") or "").strip()
     if not narrative:
@@ -233,14 +251,25 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
         if self._owns_client and self._client is not None:
             await self._client.aclose()
 
-    async def _post(self, messages: list[dict[str, str]]) -> dict[str, Any]:
+    async def _post(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> dict[str, Any]:
         body = {
             "model": self.settings.model,
             "messages": messages,
-            "temperature": self.settings.temperature,
-            "max_tokens": self.settings.max_tokens,
+            "temperature": self.settings.temperature if temperature is None else temperature,
+            "max_tokens": self.settings.max_tokens if max_tokens is None else max_tokens,
             "stream": False,
         }
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        if _is_local_endpoint(self.settings.base_url):
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         if self._client is not None:
             response = await self._client.post("chat/completions", json=body)
             response.raise_for_status()
@@ -268,15 +297,49 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError("LLM response did not include a message body") from exc
         if isinstance(content, list):
-            return "".join(
-                str(part.get("text", ""))
-                for part in content
-                if isinstance(part, dict)
-            )
+            return "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
         return str(content)
 
     async def _call(self, messages: list[dict[str, str]]) -> str:
         return self._message_content(await self._post(messages))
+
+    async def complete_text(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Run a generic completion through the same configured endpoint.
+
+        Story Mode uses :meth:`generate` for prose proposals. Importers and
+        other structured workflows use this narrower method so they share the
+        endpoint, authentication, timeout, and response handling without
+        coupling their prompts to Story Mode's proposal schema.
+        """
+        return self._message_content(
+            await self._post(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+
+    async def complete_json(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Request JSON mode and parse the first JSON object in the response."""
+        payload = await self._post(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=True,
+        )
+        return _extract_json_object(self._message_content(payload))
 
     @staticmethod
     def _prompt(

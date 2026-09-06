@@ -32,14 +32,13 @@ class SourceDocument(BaseModel):
     title: str
     kind: Literal["text", "markdown"]
     locale: str = "en"
+    encoding: str = "utf-8"
     source_path: str | None = None
     sha256: str
     chapters: list[SourceChapter] = Field(min_length=1)
 
 
-_MARKDOWN_HEADING = re.compile(
-    r"^\s*(?P<marks>#{1,6})\s+(?P<title>.+?)\s*#*\s*$"
-)
+_MARKDOWN_HEADING = re.compile(r"^\s*(?P<marks>#{1,6})\s+(?P<title>.+?)\s*#*\s*$")
 _PLAIN_CHAPTER = re.compile(
     r"^\s*(?:chapter\s+[\w.-]+|part\s+[\w.-]+|volume\s+[\w.-]+|"
     r"第\s*[^\n]{1,30}[章节卷回]|(?:序章|楔子|尾声|终章)|"
@@ -274,12 +273,7 @@ def scaffold_bundle(
         story_id=bundle_story_id,
         title=bundle_title,
         locale=document.locale,
-        opening=(
-            "Imported source: "
-            + bundle_title
-            + ".\n\n"
-            + chapters[0].text[:1200]
-        ),
+        opening=("Imported source: " + bundle_title + ".\n\n" + chapters[0].text[:1200]),
         source=SourceManifest(
             kind=document.kind,
             label=document.title,

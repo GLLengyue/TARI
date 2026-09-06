@@ -5,7 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -129,7 +129,7 @@ class StoryBundle(BaseModel):
     optional_rules: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_references(self) -> "StoryBundle":
+    def validate_references(self) -> StoryBundle:
         if not self.story_beats:
             raise ValueError("story_beats must contain at least one beat")
 
@@ -189,7 +189,8 @@ class StoryBundle(BaseModel):
                 unknown_reveals = set(choice.reveal_fact_ids) - fact_ids
                 if unknown_reveals:
                     raise ValueError(
-                        f"choice {choice.choice_id!r} reveals unknown facts: {sorted(unknown_reveals)}"
+                        f"choice {choice.choice_id!r} reveals unknown facts: "
+                        f"{sorted(unknown_reveals)}"
                     )
 
         if self.story_beats[0].terminal:
@@ -238,7 +239,7 @@ def write_bundle(path: str | Path, bundle: StoryBundle) -> None:
     """Write a bundle using the format implied by the destination suffix."""
     bundle_path = Path(path)
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = bundle.model_dump(mode="python")
+    payload = bundle.model_dump(mode="json")
     if bundle_path.suffix.lower() == ".json":
         bundle_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

@@ -14,7 +14,7 @@ from .domain import (
 from .providers import LLMSettings, OpenAINarrativeAuthor, resolve_llm_settings
 from .runtime import NarrativeOrchestrator
 from .storage import StoryStore
-from .workflow import branch_session, create_session, import_bundle
+from .workflow import branch_session, compile_bundle, create_session, import_bundle
 
 __all__ = [
     "CanonPolicy",
@@ -32,6 +32,7 @@ __all__ = [
     "StorySessionState",
     "StoryStore",
     "branch_session",
+    "compile_bundle",
     "create_session",
     "import_bundle",
     "resolve_llm_settings",

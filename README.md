@@ -21,9 +21,9 @@ TARI addresses the failure modes of a single model acting as the world, referee,
 
 ## 当前版本 | Current status
 
-当前是 **v0.1 MVP**，重点不是立即增加功能，而是验证核心 loop 是否比单模型 RP 更稳定。下一阶段优先补可靠性、可测试性和故障恢复，再扩展多角色，最后接入 SillyTavern 与本地模型。
+当前仍是 **v0.1 MVP**，重点是验证核心 loop 是否比单模型 RP 更稳定。本轮已完成 Story Mode 的第一条可验收 vertical slice：可恢复拆书编译、Story Bundle、local/OpenAI-compatible 写手，以及 CLI 和 HTTP 的会话、回合、事件与分支接口。传统多 Agent TRPG loop 仍按可靠性、可测试性和故障恢复优先推进，SillyTavern 适配器和成熟客户端仍在路线图中。
 
-The project is currently at **v0.1 MVP**. The immediate priority is to verify that the core loop is more stable than a single-model RP baseline. Reliability, testability, and recovery come before additional actors, SillyTavern, or local models.
+The project remains at **v0.1 MVP**. This iteration delivers an acceptance-ready Story Mode vertical slice: resumable source compilation, Story Bundles, a local/OpenAI-compatible prose author, and CLI/HTTP session, turn, event, and branch surfaces. The traditional multi-agent TRPG loop still prioritizes reliability, testability, and recovery; a SillyTavern adapter and mature client remain on the roadmap.
 
 完整路线见 [技术路线图 | Technical Roadmap](docs/technical-roadmap.md)。
 
@@ -54,7 +54,9 @@ The MVP has no difficulty classes or modifiers.
 - 战役快照和恢复 / campaign snapshots and resume
 - 独立的 provider、model、agent YAML 配置 / independent provider, model, and agent YAML configuration
 - 不影响普通游玩的 Debug trace / debug traces outside normal play
+- 可恢复的语义拆书编译：章节卡、情节弧、世界知识、结构大纲和审计产物 / resumable semantic source compilation with chapter cards, arcs, world knowledge, structures, and audit artifacts
 - Story Mode：Story Bundle、选择节拍、玩家身份、分支和原子叙事事件 / Story Mode bundles, beats, identities, branches, and atomic narrative events
+- OpenAI-compatible 本地/远程写手，以及 Story Mode CLI 和 HTTP vertical slice / OpenAI-compatible local or remote prose author plus Story Mode CLI and HTTP vertical slice
 
 ## 互动叙事 | Interactive narrative
 
@@ -119,6 +121,11 @@ trpg new SCENARIO --world-info worldinfo.json   # 合并 SillyTavern 世界书
 trpg import-card CARD [--sidecar SIDECAR] [--output FILE] [--seed N] [--campaign-id ID] [--show]
 trpg export-lorebook CAMPAIGN_ID [--output FILE]  # 导出为 SillyTavern world info
 trpg play CAMPAIGN_ID [--debug] [--fake]
+trpg story-import SOURCE [--output FILE] [--story-id ID]
+trpg story-compile SOURCE --output-dir DIR [--story-id ID]  # 可恢复拆书编译
+trpg story-new BUNDLE --session-id ID
+trpg story-play BUNDLE SESSION_ID [--author fake|llm]
+trpg story-branch SESSION_ID BRANCH_ID
 trpg inspect-state CAMPAIGN_ID [--all]
 trpg inspect-events CAMPAIGN_ID
 trpg replay CAMPAIGN_ID
@@ -192,7 +199,7 @@ The runtime never treats model prose as authoritative state. Structured patches 
 - 语义 Auditor 的质量取决于配置的模型 / semantic Auditor quality depends on the configured model
 - LLM 文本不确定，即使骰点是确定的 / LLM text is not deterministic, even when dice are
 - Replay 校验已记录骰点和事件顺序，但不会生成完全相同的 prose / replay verifies recorded dice and event ordering, but does not regenerate identical prose
-- 尚无 Web UI 或 SillyTavern 适配器 / no web UI or SillyTavern adapter yet
+- 已有通用本机 Web 控制台；尚无 Story Mode 专用页面或 SillyTavern 适配器 / a general local Web console exists; no dedicated Story Mode page or SillyTavern adapter yet
 
 ## 技术路线 | Roadmap
 

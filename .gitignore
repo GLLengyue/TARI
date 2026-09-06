@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 runtime-data/
+logs/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

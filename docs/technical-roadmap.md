@@ -10,6 +10,8 @@
 | 目标形态 / Target | 可稳定完成多场景短篇战役的 TRPG runtime / a runtime that can complete short multi-scene campaigns reliably |
 | 规划方式 / Planning model | 以退出条件推进，不承诺固定日期 / exit-gated phases rather than calendar promises |
 
+> **本轮状态 / Iteration status:** Story Mode 的第一条 vertical slice 已达到验收状态：可恢复语义拆书、Story Bundle、OpenAI-compatible 写手，以及初版 CLI/HTTP 会话、回合、事件和分支接口均已实现并通过离线验证。它不等于传统 Campaign API 的完整 Phase 5，也不包含 SillyTavern 适配器或专门的 Story Mode 浏览器页面；这些仍保留在路线图中。
+
 ## 0. 待办备忘 | Open TODOs
 
 - **CLI 实时性（流式输出 + CoT 进度）**：✅ CLI 阶段流式已完成（TurnOrchestrator 进度回调 + `trpg play` 即时渲染，`--no-progress` 可关）。待做：token 级流式渲染与 GM chain of thought 进度面板，留给 Phase 5 的 HTTP/SSE 层；CoT 是非权威 UX 通道，不得进入 SSE 正文/事件正文。

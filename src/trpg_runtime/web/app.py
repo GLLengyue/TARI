@@ -7,7 +7,7 @@ import os
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -19,6 +19,16 @@ from ..agents import AgentSuite, FakeAgentSuite, PydanticAISuite
 from ..composer import ComposeRequest, build_preview, compose_state, create_campaign
 from ..config import RuntimeConfig, load_runtime_config
 from ..gm_docs import RULES_PRESETS
+from ..narrative import (
+    CanonPolicy,
+    FakeNarrativeAuthor,
+    NarrativeInput,
+    NarrativeOrchestrator,
+    OpenAINarrativeAuthor,
+    PlayerIdentity,
+    StoryStore,
+    resolve_llm_settings,
+)
 from ..resource_library import ResourceLibrary
 from ..runtime import TurnOrchestrator
 from ..storage import EventStore
@@ -28,11 +38,40 @@ UPLOAD_KINDS = {"scenarios", "cards", "worlds"}
 logger = logging.getLogger("tari.web")
 
 
+def _story_store(db_path: str) -> StoryStore:
+    return StoryStore(db_path)
+
+
+def _story_author_for(fake: bool):
+    if fake:
+        return FakeNarrativeAuthor()
+    return OpenAINarrativeAuthor(resolve_llm_settings())
+
+
 class TurnRequest(BaseModel):
     player_input: str
     request_id: str | None = None
     fake: bool = False
     stream: bool = True
+
+
+class StorySessionRequest(BaseModel):
+    story_id: str
+    session_id: str | None = None
+    player_name: str = "Player"
+    identity_type: str = "visitor"
+    persona: str = ""
+    host_character: str | None = None
+    canon_policy: str = "guided"
+    seed: int = 0
+
+
+class StoryTurnRequest(BaseModel):
+    text: str = ""
+    choice_id: str | None = None
+    input_mode: str = "freeform"
+    request_id: str | None = None
+    fake: bool = True
 
 
 def _state_not_found() -> HTTPException:
@@ -81,6 +120,7 @@ def create_app(
             "scenarios": [r.to_dict() for r in lib.by_kind("scenarios")],
             "cards": [r.to_dict() for r in lib.by_kind("cards")],
             "worlds": [r.to_dict() for r in lib.by_kind("worlds")],
+            "stories": [r.to_dict() for r in lib.by_kind("stories")],
             "rulesets": [{"id": key, "text": text} for key, text in RULES_PRESETS.items()],
             "warnings": lib.warnings,
         }
@@ -368,6 +408,176 @@ def create_app(
         )
         tmp_path.replace(config_path)
         return {"config": config.model_dump(mode="json")}
+
+    # --- Story Mode API --------------------------------------------------
+    # The Story Mode runtime is deliberately separate from the traditional
+    # TRPG campaign pipeline: it uses a different schema, different agent
+    # contract, and a different SQLite table set. Endpoints below expose the
+    # same create/state/turn/branch verbs without disturbing the legacy
+    # ``/api/campaigns`` surface.
+
+    def _resolve_story_resource(req: Request, story_id: str):
+        lib: ResourceLibrary = req.app.state.library
+        for res in lib.by_kind("stories"):
+            if res.meta.get("story_id") == story_id:
+                return res
+        raise HTTPException(status_code=404, detail=f"unknown story: {story_id}")
+
+    def _story_session_state_from_request(req: Request, session_id: str, branch_id: str = "main"):
+        store = _story_store(req.app.state.store.path)
+        try:
+            return store.load_story_snapshot(session_id, branch_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    def _serialize_story_state(state) -> dict[str, Any]:
+        choices = [choice.model_dump(mode="json") for choice in state.available_choices]
+        revealed = sorted(state.revealed_fact_ids)
+        return {
+            "session_id": state.session_id,
+            "story_id": state.story_id,
+            "title": state.title,
+            "branch_id": state.branch_id,
+            "parent_branch_id": state.parent_branch_id,
+            "turn_number": state.turn_number,
+            "version": state.version,
+            "locale": state.locale,
+            "canon_policy": state.canon_policy.value,
+            "current_beat_id": state.current_beat_id,
+            "status": state.status,
+            "player": state.player_identity.model_dump(mode="json"),
+            "available_choices": choices,
+            "completed_beat_ids": list(state.completed_beat_ids),
+            "revealed_fact_ids": revealed,
+            "variables": state.variables,
+            "relationship_values": state.relationship_values,
+            "last_narrative": state.last_narrative,
+        }
+
+    @app.post("/api/story/sessions")
+    async def create_story_session(body: StorySessionRequest, request: Request) -> dict[str, Any]:
+        res = _resolve_story_resource(request, body.story_id)
+        lib: ResourceLibrary = request.app.state.library
+        bundle = lib.load_story_bundle(res)
+        try:
+            identity = PlayerIdentity(
+                display_name=body.player_name,
+                identity_type=cast(
+                    Literal["embody", "possess", "visitor", "replacement"],
+                    body.identity_type,
+                ),
+                persona=body.persona,
+                host_character=body.host_character,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid player identity: {exc}") from exc
+        try:
+            policy = CanonPolicy(body.canon_policy)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid canon policy: {exc}") from exc
+        store = _story_store(request.app.state.store.path)
+        if body.session_id and store.has_story_session(body.session_id):
+            raise HTTPException(
+                status_code=409, detail=f"story session already exists: {body.session_id}"
+            )
+        runtime = NarrativeOrchestrator(store, bundle, FakeNarrativeAuthor())
+        state = await runtime.start_session(
+            identity,
+            session_id=body.session_id,
+            seed=body.seed,
+            canon_policy=policy,
+        )
+        return _serialize_story_state(state)
+
+    @app.get("/api/story/sessions/{session_id}")
+    async def story_session_state(
+        session_id: str, request: Request, branch_id: str = "main"
+    ) -> dict[str, Any]:
+        state = _story_session_state_from_request(request, session_id, branch_id)
+        return _serialize_story_state(state)
+
+    @app.get("/api/story/sessions/{session_id}/branches")
+    async def story_session_branches(session_id: str, request: Request) -> dict[str, Any]:
+        store = _story_store(request.app.state.store.path)
+        return {"branches": store.list_story_branches(session_id)}
+
+    @app.get("/api/story/sessions/{session_id}/events")
+    async def story_session_events(
+        session_id: str, request: Request, branch_id: str = "main"
+    ) -> dict[str, Any]:
+        store = _story_store(request.app.state.store.path)
+        return {"events": store.story_events(session_id, branch_id)}
+
+    @app.post("/api/story/sessions/{session_id}/branches/{branch_id}")
+    async def story_session_branch(
+        session_id: str, branch_id: str, request: Request
+    ) -> dict[str, Any]:
+        store = _story_store(request.app.state.store.path)
+        try:
+            parent = store.load_story_snapshot(session_id, "main")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            child = store.create_story_branch(parent, branch_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _serialize_story_state(child)
+
+
+    @app.post("/api/story/sessions/{session_id}/turns")
+    async def story_session_turn(
+        session_id: str,
+        body: StoryTurnRequest,
+        request: Request,
+        branch_id: str = "main",
+    ) -> dict[str, Any]:
+        store = _story_store(request.app.state.store.path)
+        try:
+            state = store.load_story_snapshot(session_id, branch_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        lib: ResourceLibrary = request.app.state.library
+        bundle = None
+        for res in lib.by_kind("stories"):
+            if res.meta.get("story_id") == state.story_id:
+                bundle = lib.load_story_bundle(res)
+                break
+        if bundle is None:
+            raise HTTPException(status_code=404, detail=f"unknown story: {state.story_id}")
+
+        try:
+            incoming = NarrativeInput(
+                text=body.text,
+                choice_id=body.choice_id,
+                input_mode=cast(
+                    Literal["choice", "freeform", "continue"], body.input_mode
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        author = _story_author_for(body.fake)
+        runtime = NarrativeOrchestrator(store, bundle, author)
+        try:
+            new_state, result = await runtime.process_turn(
+                state, incoming, request_id=body.request_id
+            )
+        except Exception as exc:  # noqa: BLE001 - surface validation errors
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "state": _serialize_story_state(new_state),
+            "result": {
+                "turn": result.turn_number,
+                "narrative": result.narrative,
+                "narrative_beat_id": result.narrative_beat_id,
+                "current_beat_id": result.current_beat_id,
+                "choice_id": result.choice_id,
+                "input_mode": result.input_mode,
+                "choices": [choice.model_dump(mode="json") for choice in result.choices],
+                "revealed_fact_ids": result.revealed_fact_ids,
+                "source_refs": result.source_refs,
+                "ended": result.ended,
+            },
+        }
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
