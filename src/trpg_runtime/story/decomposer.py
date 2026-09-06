@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from ..narrative.providers import LLMSettings
+    from ..llm import LLMSettings
 from .bundle import (
     BeatChoice,
     CanonFact,
@@ -726,7 +726,7 @@ async def _complete_json(
     label: str,
     max_tokens: int,
 ) -> dict[str, Any]:
-    from ..narrative.providers import _extract_json_object
+    from ..llm import extract_json_object
 
     last_error: Exception | None = None
     last_raw: str = ""
@@ -756,7 +756,7 @@ async def _complete_json(
                     max_tokens=max_tokens,
                 )
                 last_raw = raw_text
-                payload = _extract_json_object(raw_text)
+                payload = extract_json_object(raw_text)
             if isinstance(payload, dict):
                 return payload
             raise ValueError("模型输出不是 JSON 对象")
@@ -2174,12 +2174,12 @@ def compile_source(
     workspace = StoryCompilationWorkspace(
         Path(output_dir or Path("runtime-data") / "story-books" / source_id)
     )
-    from ..narrative.providers import OpenAINarrativeAuthor, resolve_llm_settings
+    from ..llm import OpenAICompatibleClient, resolve_llm_settings
 
     resolved = settings or resolve_llm_settings()
     active_author = cast(
         TextCompletionAuthor,
-        author or OpenAINarrativeAuthor(resolved),
+        author or OpenAICompatibleClient(resolved),
     )
     try:
         if rebuild:

@@ -1,165 +1,17 @@
 from __future__ import annotations
 
-import json
-import os
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
-from ipaddress import ip_address
-from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
+from ..llm import (
+    LLMSettings,
+    OpenAICompatibleClient,
+    extract_json_object,
+    resolve_llm_settings,
+)
+from ..story.bundle import StoryBeat
 from .author import NarrativeAuthor
 from .domain import NarrativeAuthorProposal, NarrativeChoice, NarrativeStatePatch
-
-
-@dataclass(frozen=True)
-class LLMSettings:
-    """Resolved OpenAI-compatible narrative-author configuration."""
-
-    provider: str
-    base_url: str
-    api_key: str
-    model: str
-    timeout: float = 90.0
-    temperature: float = 0.4
-    max_tokens: int = 1200
-
-    @property
-    def chat_url(self) -> str:
-        return self.base_url.rstrip("/") + "/chat/completions"
-
-    @property
-    def is_configured(self) -> bool:
-        return bool(self.base_url and self.model)
-
-
-def _clean(value: str | None) -> str:
-    return (value or "").strip().strip('"').strip("'")
-
-
-def _read_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return values
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        values[key.strip()] = _clean(value)
-    return values
-
-
-def _resolve_environment(env: Mapping[str, str] | None) -> dict[str, str]:
-    if env is not None:
-        return dict(env)
-    values = _read_env_file(Path.home() / ".evotai" / "evot.env")
-    values.update(os.environ)
-    return values
-
-
-def _provider_names(env: Mapping[str, str]) -> list[str]:
-    active = _clean(env.get("EVOT_LLM_PROVIDER")).lower()
-    names: list[str] = []
-    if active:
-        names.append(active)
-    for name in ("openai", "openrouter"):
-        if name not in names:
-            names.append(name)
-    return names
-
-
-def _normalise_base_url(value: str) -> str:
-    base = value.rstrip("/")
-    suffix = "/chat/completions"
-    if base.endswith(suffix):
-        base = base[: -len(suffix)]
-    return base
-
-
-def _is_local_endpoint(base_url: str) -> bool:
-    host = (urlparse(base_url).hostname or "").lower()
-    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
-        return True
-    try:
-        address = ip_address(host)
-    except ValueError:
-        return False
-    return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_unspecified
-    )
-
-
-def resolve_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
-    """Resolve TARI settings, then the active provider configured for evot.
-
-    ``TARI_LLM_*`` always wins. If those variables are absent, the active
-    ``EVOT_LLM_*`` provider in ``~/.evotai/evot.env`` or the process environment
-    is used when it speaks the OpenAI Chat Completions protocol.
-    """
-    values = _resolve_environment(env)
-    tari_base = _clean(values.get("TARI_LLM_BASE_URL"))
-    tari_model = _clean(values.get("TARI_LLM_MODEL"))
-
-    if tari_base and tari_model:
-        provider = _clean(values.get("TARI_LLM_PROVIDER")) or "openai"
-        api_key = _clean(values.get("TARI_LLM_API_KEY")) or "sk-no-key"
-        base_url = _normalise_base_url(tari_base)
-        model = tari_model
-    else:
-        provider = ""
-        api_key = ""
-        base_url = ""
-        model = ""
-        for candidate in _provider_names(values):
-            prefix = "EVOT_LLM_" + candidate.upper() + "_"
-            protocol = _clean(values.get(prefix + "PROTOCOL")).lower()
-            candidate_base = _clean(values.get(prefix + "BASE_URL"))
-            candidate_model = _clean(values.get(prefix + "MODEL")).split(",", 1)[0].strip()
-            if not candidate_base or not candidate_model:
-                continue
-            if protocol and protocol not in {"openai", "openai_chat"}:
-                continue
-            provider = "evot-" + candidate
-            api_key = _clean(values.get(prefix + "API_KEY")) or "sk-no-key"
-            base_url = _normalise_base_url(candidate_base)
-            model = candidate_model
-            break
-        if not base_url or not model:
-            provider = "openai"
-            api_key = "ollama"
-            base_url = "http://127.0.0.1:11434/v1"
-            model = "qwen2.5:7b"
-
-    try:
-        timeout = float(_clean(values.get("TARI_LLM_TIMEOUT")) or "90")
-    except ValueError:
-        timeout = 90.0
-    try:
-        temperature = float(_clean(values.get("TARI_LLM_TEMPERATURE")) or "0.4")
-    except ValueError:
-        temperature = 0.4
-    try:
-        max_tokens = int(_clean(values.get("TARI_LLM_MAX_TOKENS")) or "1200")
-    except ValueError:
-        max_tokens = 1200
-    return LLMSettings(
-        provider=provider,
-        base_url=base_url,
-        api_key=api_key,
-        model=model,
-        timeout=timeout,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-
 
 _SYSTEM_PROMPT = (
     "You are the prose author for an auditable interactive-fiction runtime.\n"
@@ -171,35 +23,12 @@ _SYSTEM_PROMPT = (
     "Do not reveal author-only facts.\n"
 )
 
-_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    text = _THINK_RE.sub("", text).strip()
-    if not text:
-        raise ValueError("author returned empty content")
-    if text[0] == "{" and text[-1] == "}":
-        try:
-            loaded = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"author JSON is not valid: {exc}") from exc
-        if isinstance(loaded, dict):
-            return loaded
-        raise ValueError("author JSON must be an object")
-    fence = _FENCE_RE.search(text)
-    if fence is not None:
-        return _extract_json_object(fence.group(1))
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("author response contained no JSON object")
-    return _extract_json_object(text[start : end + 1])
 
 
 def _narrative_from_content(text: str) -> str:
     try:
-        payload = _extract_json_object(text)
+        payload = extract_json_object(text)
     except ValueError:
         cleaned = _THINK_RE.sub("", text).strip().strip("`").strip()
         if not cleaned:
@@ -212,12 +41,7 @@ def _narrative_from_content(text: str) -> str:
 
 
 class OpenAINarrativeAuthor(NarrativeAuthor):
-    """Author prose through an OpenAI Chat Completions compatible endpoint.
-
-    The model writes prose only. Beat transitions, choices, facts, effects,
-    source references, and terminal state are derived from the immutable Story
-    Bundle and the runtime-resolved player choice.
-    """
+    """Adapt shared OpenAI-compatible text generation to Story Mode."""
 
     def __init__(
         self,
@@ -227,81 +51,17 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
         transport: Any | None = None,
     ) -> None:
         self.settings = settings or resolve_llm_settings()
-        self._client = client
-        self._owns_client = False
-        if client is None and transport is not None:
-            import httpx
-
-            self._client = httpx.AsyncClient(
-                base_url=self.settings.base_url.rstrip("/") + "/",
-                timeout=self.settings.timeout,
-                headers=self._headers(),
-                transport=transport,
-                trust_env=False,
-            )
-            self._owns_client = True
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": "Bearer " + self.settings.api_key,
-            "Content-Type": "application/json",
-        }
+        self._client = OpenAICompatibleClient(
+            self.settings,
+            client=client,
+            transport=transport,
+        )
 
     async def aclose(self) -> None:
-        if self._owns_client and self._client is not None:
-            await self._client.aclose()
-
-    async def _post(
-        self,
-        messages: list[dict[str, str]],
-        *,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        json_mode: bool = False,
-    ) -> dict[str, Any]:
-        body = {
-            "model": self.settings.model,
-            "messages": messages,
-            "temperature": self.settings.temperature if temperature is None else temperature,
-            "max_tokens": self.settings.max_tokens if max_tokens is None else max_tokens,
-            "stream": False,
-        }
-        if json_mode:
-            body["response_format"] = {"type": "json_object"}
-        if _is_local_endpoint(self.settings.base_url):
-            body["chat_template_kwargs"] = {"enable_thinking": False}
-        if self._client is not None:
-            response = await self._client.post("chat/completions", json=body)
-            response.raise_for_status()
-            return response.json()
-
-        import httpx
-
-        async with httpx.AsyncClient(
-            base_url=self.settings.base_url.rstrip("/") + "/",
-            timeout=self.settings.timeout,
-            headers=self._headers(),
-            trust_env=False,
-        ) as client:
-            response = await client.post("chat/completions", json=body)
-            response.raise_for_status()
-            return response.json()
-
-    @staticmethod
-    def _message_content(payload: dict[str, Any]) -> str:
-        try:
-            message = payload["choices"][0]["message"]
-            content = message.get("content")
-            if not content:
-                content = message.get("reasoning_content", "")
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ValueError("LLM response did not include a message body") from exc
-        if isinstance(content, list):
-            return "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
-        return str(content)
+        await self._client.aclose()
 
     async def _call(self, messages: list[dict[str, str]]) -> str:
-        return self._message_content(await self._post(messages))
+        return await self._client.complete_text(messages)
 
     async def complete_text(
         self,
@@ -310,19 +70,11 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """Run a generic completion through the same configured endpoint.
-
-        Story Mode uses :meth:`generate` for prose proposals. Importers and
-        other structured workflows use this narrower method so they share the
-        endpoint, authentication, timeout, and response handling without
-        coupling their prompts to Story Mode's proposal schema.
-        """
-        return self._message_content(
-            await self._post(
-                messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+        """Run generic text generation through the shared provider boundary."""
+        return await self._client.complete_text(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     async def complete_json(
@@ -332,14 +84,12 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> dict[str, Any]:
-        """Request JSON mode and parse the first JSON object in the response."""
-        payload = await self._post(
+        """Request JSON mode through the shared provider boundary."""
+        return await self._client.complete_json(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            json_mode=True,
         )
-        return _extract_json_object(self._message_content(payload))
 
     @staticmethod
     def _prompt(
@@ -372,8 +122,6 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
         selected_choice: Any,
         recent_events: Any,
     ) -> NarrativeAuthorProposal:
-        from ..story.bundle import StoryBeat
-
         if not isinstance(current_beat, StoryBeat):
             raise TypeError("OpenAINarrativeAuthor requires a StoryBeat")
         target = (
@@ -439,7 +187,7 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
             revealed_fact_ids=(list(selected_choice.reveal_fact_ids) if selected_choice else []),
             source_refs=list(target.source_refs),
             ended=target.terminal,
-            debug={"author": "openai", "model": self.settings.model},
+            debug={"author": "openai-compatible", "model": self.settings.model},
         )
 
 

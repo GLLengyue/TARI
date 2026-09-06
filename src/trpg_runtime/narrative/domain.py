@@ -34,7 +34,7 @@ class NarrativeChoice(BaseModel):
     next_beat_id: str
 
     @classmethod
-    def from_spec(cls, choice: BeatChoice) -> "NarrativeChoice":
+    def from_spec(cls, choice: BeatChoice) -> NarrativeChoice:
         return cls(
             choice_id=choice.choice_id,
             text=choice.text,

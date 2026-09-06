@@ -1,35 +1,16 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from .domain import CampaignState, TurnResult
+from .persistence import SQLiteStore
 
 
-class EventStore:
-    def __init__(self, path: str | Path):
-        self.path = str(path)
-        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._init()
-
-    @contextmanager
-    def connect(self):
-        conn = sqlite3.connect(self.path)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    def _init(self):
+class EventStore(SQLiteStore):
+    def _init(self) -> None:
         with self.connect() as c:
             c.execute("""CREATE TABLE IF NOT EXISTS events(
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 
-def _entry(entry: dict, uid: str) -> dict:
+def _entry(entry: dict[str, Any], uid: str) -> dict[str, Any]:
     return {
         "uid": entry.get("id", uid),
         "key": list(entry.get("keys") or entry.get("key") or []),
@@ -38,7 +39,7 @@ def _entry(entry: dict, uid: str) -> dict:
     }
 
 
-def convert(card_path: str | Path) -> dict:
+def convert(card_path: str | Path) -> dict[str, Any]:
     card = json.loads(Path(card_path).read_text(encoding="utf-8"))
     data = card.get("data") if isinstance(card.get("data"), dict) else card
     book = data.get("character_book") or {}
@@ -53,7 +54,10 @@ def convert(card_path: str | Path) -> dict:
             converted[str(uid)] = _entry(entry, str(uid))
     return {
         "name": str(book.get("name") or Path(card_path).stem),
-        "description": "Extracted from a Foreverse character card; import with `trpg new --world-info`.",
+        "description": (
+            "Extracted from a Foreverse character card; import with "
+            "`trpg new --world-info`."
+        ),
         "scan_depth": 4,
         "entries": converted,
     }

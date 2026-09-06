@@ -1,5 +1,6 @@
 """Interactive narrative runtime."""
 
+from ..llm import LLMSettings, resolve_llm_settings
 from .author import FakeNarrativeAuthor, NarrativeAuthor
 from .domain import (
     CanonPolicy,
@@ -11,7 +12,7 @@ from .domain import (
     PlayerIdentity,
     StorySessionState,
 )
-from .providers import LLMSettings, OpenAINarrativeAuthor, resolve_llm_settings
+from .providers import OpenAINarrativeAuthor
 from .runtime import NarrativeOrchestrator
 from .storage import StoryStore
 from .workflow import branch_session, compile_bundle, create_session, import_bundle

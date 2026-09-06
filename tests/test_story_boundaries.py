@@ -8,8 +8,9 @@ from typing import Any
 import httpx
 
 import trpg_runtime.narrative.workflow as workflow
+from trpg_runtime.llm import LLMSettings
 from trpg_runtime.narrative import PlayerIdentity
-from trpg_runtime.narrative.providers import LLMSettings, OpenAINarrativeAuthor
+from trpg_runtime.narrative.providers import OpenAINarrativeAuthor
 
 BUNDLE_PATH = "examples/story/lantern_gate.yaml"
 

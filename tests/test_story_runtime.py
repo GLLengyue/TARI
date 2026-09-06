@@ -14,7 +14,6 @@ from trpg_runtime.narrative import (
 from trpg_runtime.rules import RuleViolation
 from trpg_runtime.story import load_bundle
 
-
 BUNDLE_PATH = "examples/story/lantern_gate.yaml"
 
 

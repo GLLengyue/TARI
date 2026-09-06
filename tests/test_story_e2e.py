@@ -4,12 +4,14 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 
 import trpg_runtime.narrative.workflow as workflow
+from trpg_runtime.llm import extract_json_object
 from trpg_runtime.narrative import (
     NarrativeInput,
     NarrativeOrchestrator,
@@ -18,9 +20,7 @@ from trpg_runtime.narrative import (
     StoryStore,
     resolve_llm_settings,
 )
-from trpg_runtime.narrative.providers import _extract_json_object
 from trpg_runtime.story import load_bundle
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_SOURCE = REPO_ROOT / "examples" / "story" / "lantern_gate.md"
@@ -258,11 +258,11 @@ def test_resolve_llm_settings_prefers_tari_and_supports_evot_openai() -> None:
 
 def test_extract_json_object_handles_markdown_fences_and_trailing_text() -> None:
     fenced = "```json\n" + json.dumps({"narrative": "ok", "choices": []}) + "\n```"
-    parsed = _extract_json_object(fenced)
+    parsed = extract_json_object(fenced)
     assert parsed == {"narrative": "ok", "choices": []}
 
     prose = (
         "Some prose then " + json.dumps({"narrative": "ok", "choices": []}) + " trailing words."
     )
-    parsed = _extract_json_object(prose)
+    parsed = extract_json_object(prose)
     assert parsed["narrative"] == "ok"

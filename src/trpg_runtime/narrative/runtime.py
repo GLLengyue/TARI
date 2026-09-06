@@ -19,7 +19,6 @@ from .domain import (
 )
 from .storage import StoryStore
 
-
 _ALLOWED_PATCH_ROOTS = ("variables", "relationship_values")
 
 
@@ -45,7 +44,9 @@ def _apply_state_patches(state: StorySessionState, patches) -> StorySessionState
         if patch.operation == "set":
             container[key] = patch.new_value
         elif patch.operation == "increment":
-            if not isinstance(existing, (int, float)) or not isinstance(patch.new_value, (int, float)):
+            if not isinstance(existing, (int, float)) or not isinstance(
+                patch.new_value, (int, float)
+            ):
                 raise RuleViolation(f"increment target is not numeric at {path}")
             container[key] = existing + patch.new_value
         elif patch.operation == "add":

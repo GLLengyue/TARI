@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from ..storage import EventStore
+from ..persistence import SQLiteStore
 from .domain import NarrativeTurnResult, StorySessionState
 
 
-class StoryStore(EventStore):
+class StoryStore(SQLiteStore):
     """SQLite persistence for Story Mode.
 
     Story tables are deliberately separate from the existing TRPG campaign
@@ -19,7 +19,6 @@ class StoryStore(EventStore):
     """
 
     def _init(self) -> None:
-        super()._init()
         with self.connect() as conn:
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS story_branches(
@@ -80,7 +79,8 @@ class StoryStore(EventStore):
     ) -> str:
         event_id = str(uuid4())
         conn.execute(
-            "INSERT INTO story_events(event_id,session_id,branch_id,turn_number,event_type,payload,created_at) "
+            "INSERT INTO story_events("
+            "event_id,session_id,branch_id,turn_number,event_type,payload,created_at) "
             "VALUES(?,?,?,?,?,?,?)",
             (
                 event_id,
@@ -103,7 +103,8 @@ class StoryStore(EventStore):
             if exists:
                 raise ValueError(f"story session already exists: {state.session_id}")
             conn.execute(
-                "INSERT INTO story_branches(session_id,branch_id,parent_branch_id,forked_from_event_id,"
+                "INSERT INTO story_branches("
+                "session_id,branch_id,parent_branch_id,forked_from_event_id,"
                 "forked_from_turn,created_at) VALUES(?,?,?,?,?,?)",
                 (state.session_id, state.branch_id, None, None, state.turn_number, now),
             )
@@ -122,7 +123,8 @@ class StoryStore(EventStore):
                 now,
             )
             conn.execute(
-                "INSERT INTO story_snapshots(session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?)",
+                "INSERT INTO story_snapshots("
+                "session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?)",
                 (state.session_id, state.branch_id, state.model_dump_json(), now),
             )
 
@@ -149,9 +151,10 @@ class StoryStore(EventStore):
         now = self._now()
         with self.connect() as conn:
             conn.execute(
-                "INSERT INTO story_snapshots(session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(session_id,branch_id) DO UPDATE SET state_json=excluded.state_json,"
-                "updated_at=excluded.updated_at",
+                "INSERT INTO story_snapshots("
+                "session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(session_id,branch_id) DO UPDATE SET "
+                "state_json=excluded.state_json,updated_at=excluded.updated_at",
                 (state.session_id, state.branch_id, state.model_dump_json(), now),
             )
 
@@ -259,8 +262,8 @@ class StoryStore(EventStore):
     def list_story_branches(self, session_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT branch_id,parent_branch_id,forked_from_event_id,forked_from_turn,created_at "
-                "FROM story_branches WHERE session_id=? ORDER BY created_at,branch_id",
+                "SELECT branch_id,parent_branch_id,forked_from_event_id,forked_from_turn,"
+                "created_at FROM story_branches WHERE session_id=? ORDER BY created_at,branch_id",
                 (session_id,),
             ).fetchall()
         return [
@@ -274,13 +277,16 @@ class StoryStore(EventStore):
             for row in rows
         ]
 
-    def create_story_branch(
-        self, state: StorySessionState, branch_id: str
-    ) -> StorySessionState:
+    def create_story_branch(self, state: StorySessionState, branch_id: str) -> StorySessionState:
         if not branch_id or branch_id in {state.branch_id, "main"}:
             raise ValueError(f"invalid or existing branch id: {branch_id!r}")
-        if any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in branch_id):
-            raise ValueError("branch_id may contain only letters, numbers, underscores, and hyphens")
+        if any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for char in branch_id
+        ):
+            raise ValueError(
+                "branch_id may contain only letters, numbers, underscores, and hyphens"
+            )
 
         child = state.model_copy(
             update={
@@ -300,7 +306,8 @@ class StoryStore(EventStore):
                 raise KeyError(f"unknown parent story branch: {state.session_id}/{state.branch_id}")
             try:
                 conn.execute(
-                    "INSERT INTO story_branches(session_id,branch_id,parent_branch_id,forked_from_event_id,"
+                    "INSERT INTO story_branches("
+                    "session_id,branch_id,parent_branch_id,forked_from_event_id,"
                     "forked_from_turn,created_at) VALUES(?,?,?,?,?,?)",
                     (
                         child.session_id,
@@ -325,7 +332,8 @@ class StoryStore(EventStore):
                     now,
                 )
                 conn.execute(
-                    "INSERT INTO story_snapshots(session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?)",
+                    "INSERT INTO story_snapshots("
+                    "session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?)",
                     (child.session_id, child.branch_id, child.model_dump_json(), now),
                 )
             except sqlite3.IntegrityError as exc:
@@ -367,14 +375,16 @@ class StoryTurnTransaction:
                     now,
                 )
             conn.execute(
-                "INSERT INTO story_snapshots(session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(session_id,branch_id) DO UPDATE SET state_json=excluded.state_json,"
-                "updated_at=excluded.updated_at",
+                "INSERT INTO story_snapshots("
+                "session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(session_id,branch_id) DO UPDATE SET "
+                "state_json=excluded.state_json,updated_at=excluded.updated_at",
                 (state.session_id, state.branch_id, state.model_dump_json(), now),
             )
             if request_id is not None and result is not None:
                 conn.execute(
-                    "INSERT INTO story_turn_results(request_id,session_id,branch_id,turn_number,result_json,created_at) "
+                    "INSERT INTO story_turn_results("
+                    "request_id,session_id,branch_id,turn_number,result_json,created_at) "
                     "VALUES(?,?,?,?,?,?)",
                     (
                         request_id,

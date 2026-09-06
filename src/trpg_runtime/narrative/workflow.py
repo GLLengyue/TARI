@@ -26,7 +26,7 @@ from .runtime import NarrativeOrchestrator
 from .storage import StoryStore
 
 if TYPE_CHECKING:
-    from ..narrative.providers import LLMSettings
+    from ..llm import LLMSettings
     from ..story.decomposer import CompilationResult, TextCompletionAuthor
 
 

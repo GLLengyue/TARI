@@ -1,446 +1,234 @@
 # TARI 技术路线图 | Technical Roadmap
 
-> **中文摘要：** TARI 将先证明“可审计的多 Agent 核心 loop”比单模型 RP 更稳定，再逐步扩展到多角色、分支时间线、成熟客户端和云端/本地混合模型。<br>
-> **English summary:** TARI will first prove that an auditable multi-agent loop is more reliable than a single-model RP baseline, then expand to multiple actors, branching timelines, mature clients, and hybrid cloud/local models.
+> 本路线图按架构边界和退出条件推进，不按“增加模型调用次数”推进。版本号表示能力里程碑，不承诺日期。
+>
+> TARI is planned by architectural boundaries and exit gates, not by adding model calls. Version labels are capability milestones, not calendar promises.
 
-| 项目 | 当前规划 |
+## 1. 当前基线 | Current baseline
+
+| 项目 | 状态 |
 | --- | --- |
-| 当前版本 / Current version | `v0.1` MVP |
-| 首要目标 / Immediate goal | 验证可靠性和可测试性，而不是快速增加功能 / validate reliability and testability before adding features |
-| 目标形态 / Target | 可稳定完成多场景短篇战役的 TRPG runtime / a runtime that can complete short multi-scene campaigns reliably |
-| 规划方式 / Planning model | 以退出条件推进，不承诺固定日期 / exit-gated phases rather than calendar promises |
+| 版本 | `v0.1` MVP |
+| 传统 Campaign context | 已有可审计 TRPG loop、2d6、Spotlight、GM/Actor/Auditor、事件/快照/恢复 |
+| Story context | 已有 source import、可恢复语义编译、Story Bundle、选择/自由行动/分支 runtime |
+| 共享内核 | `persistence.SQLiteStore` 和 `llm.OpenAICompatibleClient` 已落地 |
+| 客户端 | CLI 和本机 Web vertical slice；尚无专用 Story 页面或 SillyTavern adapter |
+| 本轮验收 | Odyssey：24 章、6 弧、311 entities、352 facts、229 relationships；全量 pytest/Ruff 通过 |
 
-> **本轮状态 / Iteration status:** Story Mode 的第一条 vertical slice 已达到验收状态：可恢复语义拆书、Story Bundle、OpenAI-compatible 写手，以及初版 CLI/HTTP 会话、回合、事件和分支接口均已实现并通过离线验证。它不等于传统 Campaign API 的完整 Phase 5，也不包含 SillyTavern 适配器或专门的 Story Mode 浏览器页面；这些仍保留在路线图中。
+架构基线见 [architecture.md](architecture.md)。核心决策是：**Campaign 和 Story 是两个 bounded context；共享 persistence/llm 基础设施，但不共享业务状态、事件语义或运行时继承关系。**
 
-## 0. 待办备忘 | Open TODOs
+## 2. 不可违反的架构约束 | Non-negotiable constraints
 
-- **CLI 实时性（流式输出 + CoT 进度）**：✅ CLI 阶段流式已完成（TurnOrchestrator 进度回调 + `trpg play` 即时渲染，`--no-progress` 可关）。待做：token 级流式渲染与 GM chain of thought 进度面板，留给 Phase 5 的 HTTP/SSE 层；CoT 是非权威 UX 通道，不得进入 SSE 正文/事件正文。
-  **Streaming output + CoT progress**: ✅ stage streaming shipped in the CLI; token-level streaming and CoT panels belong to the Phase 5 SSE layer as non-authoritative UX.
+1. **Runtime authority**：LLM 只能返回 typed proposal 或 prose；确定性 runtime 拥有状态、骰点、权限、分支和提交。
+2. **Context isolation**：`CampaignState`、`StorySessionState`、`StoryBundle` 不互相转换，不创建跨领域 God object。
+3. **Shared kernel stays small**：共享层只放 SQLite 生命周期、LLM endpoint/config/JSON transport 等无领域语义能力。
+4. **Append-only history**：事件只追加；编辑旧 transcript 必须创建分支或显式 runtime 操作。
+5. **Atomic commit**：一个已接受的回合的事件、快照和幂等结果必须原子提交；失败不能留下半个权威回合。
+6. **Adapters stay thin**：CLI/Web 不直接操作 SQLite 表，不复制领域校验，不让 HTTP schema 反向成为 domain schema。
+7. **Evidence boundary**：编译器产物必须保留 source refs；模型推断不能绕过 Bundle 校验成为 canon。
 
-- **角色卡兼容（Character Card V2/V3）**：✅ 完成。导入器（`trpg import-card`，PNG/JSON → ActorState + sidecar，含语言检测与场景生成）；lorebook 双向映射（`trpg export-lorebook` + `trpg new --world-info`，TARI 语义通过 `comment` 标记 `tari:public`/`tari:hidden`/`tari:know:<actor>` 保留）。
-  **Character card compatibility (V2/V3)**: ✅ done. Importer plus bidirectional lorebook mapping (world-info export/import with TARI markers in comments).
+## 3. 已完成里程碑 | Completed milestones
 
-- **强 GM Agent（工具调用）**：✅ 只读查询工具已完成（`gm_search_rules` / `gm_search_world` / `gm_get_character_card` / `gm_get_scenario_outline`），工具调用写入 `tool_called` 审计事件。核心规则内联进 GM 提示词，工具只作按需补充，每次 GM 调用有 10 次请求上限防失控（实测曾出现工具反复查询死循环，已通过内联规则 + 明确"至多一次工具调用"修复）。待做：提案工具化（`request_check` / `propose_patch` / `grant_spotlight` 从 typed output 演进为工具）。
-  **Strong GM agent with tools**: ✅ read-only retrieval tools shipped with audit events; inline core rules + request limits fix a tool-call loop found in real testing. Proposal tools are next.
+### M0：Story Mode vertical slice — 已完成
 
-- **弱 Roleplay Agent（虚构层专用，方案 A 已确认）**：✅ 契约已显式化并在测试中强制（fiction-only 视图：只含自身状态、公开事实、观察、近期公开事件、Spotlight；多角色隔离测试覆盖其他角色的知识/秘密不得泄漏）。
-  **Weak roleplay agents (Option A confirmed)**: ✅ fiction-only contract enforced by tests, including multi-actor knowledge isolation.
+交付内容：
 
-- **分层设计哲学（虚构层/规则层/事实层）+ Spotlight 策略**：✅ SpotlightPolicy 已实现（GM 提议 + 运行时校验 + 无效提议回退玩家 + `spotlight_policy_fallback` 审计事件，回合不中断）。三层模型见 `docs/design/three-layer-architecture.md`。
-  **Three-layer philosophy + Spotlight policy**: ✅ SpotlightPolicy shipped with fallback and audit events. See `docs/design/three-layer-architecture.md`.
+- `story-import`：UTF-8 TXT/Markdown 的确定性 source-preserving scaffold；
+- `story-compile`：source plan、chapter cards、rolling arcs、world knowledge、volume/novel structures、Bundle 和审计中间产物；
+- manifest/checkpoint/source SHA/content SHA/settings fingerprint/atomic writes；
+- local llama-server 的 Qwen thinking 关闭、JSON mode、串行 world batches、失败 checkpoint 和续跑；
+- `NarrativeOrchestrator`：choice、freeform、continue、窄状态 patch、事实揭示、terminal beat；
+- `StoryStore`：事件、快照、分支、request-id 幂等；
+- CLI 和初版 `/api/story/...` HTTP surface；
+- Odyssey 离线产物验收和 compiler/runtime/API 回归测试。
 
-- **回合原子事务 + `turn_aborted`**：✅ `TurnTransaction` 在单个 SQLite 事务中提交一回合的全部事件、快照与 `turn_results`；任何失败只落一条 `turn_aborted`（含错误与已收集事件清单），半截事件永不入库，重试会得到同一骰点序列。
-  **Atomic turn transactions**: ✅ one transaction per turn; failures persist only a `turn_aborted` audit event and retries stay deterministic.
-
-- **`request_id` 幂等**：✅ `process_turn(..., request_id=)` 重复请求直接返回缓存结果（`turn_results` 表），不重复执行回合；CLI 每回合生成新 id，为 HTTP 客户端重试预留。
-  **Request idempotency**: ✅ duplicate request_ids return the cached `TurnResult` without re-running.
-
-- **快照重建命令（`trpg recover`）**：✅ `trpg recover CAMPAIGN_ID --scenario SCENARIO` 从 `campaign_created` + `state_patch_committed` 事件重建快照，恢复 turn/version/Spotlight，并记录 `snapshot_rebuilt` 事件。本轮真实事故已用它验证。
-  **Snapshot rebuild (`trpg recover`)**: ✅ shipped and verified against a real corrupted snapshot.
-
-- **代码质量收尾**：✅ mypy 0 错误（含 types-PyYAML 桩）、ruff 全绿、`process_turn` 拆分为带类型标注的辅助方法、补丁操作增加类型守卫（add/remove 目标必须是列表、increment 必须是数字，报 `RuleViolation` 而非 TypeError）。
-  **Code quality**: ✅ mypy clean, ruff clean, typed helpers, clearer patch validation errors.
-
-## 1. 项目目标 | Project objective
-
-TARI 的核心问题不是“让模型写出更漂亮的 prose”，而是让模型协作过程具备可验证的权限、状态和随机性边界：
-
-TARI is not primarily about generating prettier prose. It is about giving model collaboration verifiable boundaries for authority, state, and randomness:
-
-- 玩家保留对玩家角色意图的决定权 / the player retains control over player-character intent；
-- GM 负责提出裁定，规则运行时负责验证并提交 / the GM proposes adjudication while the runtime validates and commits it；
-- Actor 只能读取自己的视图，不能把未知信息写成事实 / actors only read their own views and cannot turn unknown information into facts；
-- 骰点真正改变后果，而不只是改变措辞 / dice change consequences, not merely wording；
-- 每个回合可以审计、恢复、重放，并能定位失败步骤 / each turn can be audited, recovered, replayed, and attributed to a failing step。
-
-## 2. 技术原则 | Technical principles
-
-| 原则 | 约束 |
-| --- | --- |
-| 运行时权威 / Runtime authority | LLM 只返回 typed proposal；骰点、权限、Spotlight 和状态提交由确定性代码掌握。<br>LLMs return typed proposals only; deterministic code owns dice, permissions, spotlight, and commits. |
-| 事件历史不可静默改写 / Immutable history | 历史事件只追加，不被客户端 transcript 或模型输出静默覆盖。<br>Events are appended, never silently rewritten by a transcript or model output. |
-| 知识投影隔离 / Knowledge projection | 世界真相、角色信念和玩家已知信息分开建模。<br>World truth, character beliefs, and player knowledge remain separate. |
-| 可恢复优先 / Recovery first | 失败回合必须能中止并从最后一个已提交回合恢复。<br>Failed turns must abort cleanly and resume from the last committed turn. |
-| Provider 解耦 / Provider decoupling | 模型供应商可替换，不侵入规则、Agent 协议和持久化层。<br>Providers remain replaceable without leaking into rules, agent protocols, or persistence. |
-
-## 3. Phase 0：MVP 验证与问题收集 | MVP validation
-
-**目标 / Goal：** 暂停新增功能，验证当前架构假设和“多 Agent loop 是否值得额外复杂度”。
-
-Pause feature expansion and validate the architecture and whether the multi-agent loop earns its complexity.
-
-### 3.1 三类测试 | Three validation tracks
-
-#### A. 离线 Fake Agent 测试 | Offline Fake Agent tests
-
-验证确定性 runtime：
-
-Validate the deterministic runtime:
+验收门禁：
 
 ```bash
-pytest
-trpg new examples/station_zero.yaml --fake
-trpg play station-zero --fake --debug
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check .
+git diff --check
 ```
 
-至少观察以下行为：
+### M1：架构收敛 — 当前已完成
 
-- `2d6` 结果和结果档位是否正确；
-- Spotlight 是否每轮回到玩家；
-- State Patch 是否只由 GM 提交；
-- Actor View 是否阻止 GM 隐藏事实泄漏；
-- 退出后重新启动能否恢复；
-- Replay 是否完整展示骰点和公开事件。
+- `persistence.SQLiteStore` 提供共享 SQLite 生命周期，Campaign/Story 各自定义 schema；
+- `llm.LLMSettings`、`OpenAICompatibleClient`、`extract_json_object` 成为跨上下文 provider 基础设施；
+- Story compiler 不再依赖 `narrative.providers`；
+- StoryStore 不再继承 EventStore；
+- 删除只服务 Odyssey 一次运行的 detached launcher、merge probe、status 和 bundle verifier；
+- 清零全仓 Ruff 基线问题；
+- 架构文档和本路线图与实际实现对齐。
 
-#### B. 真实云端模型测试 | Real provider tests
+## 4. 下一阶段：可靠性合同化 | M2 Reliability contracts
 
-为 GM、Actor、Auditor 分别配置模型，运行 **20–30 轮**真实游戏。记录：
+**目标：** 不增加业务表面，先证明两个 context 都能在 provider 失败、进程中断和重复请求下保持权威历史正确。
 
-Configure models independently for the GM, Actor, and Auditor, then run **20–30 turns**. Record:
+### 4.1 Campaign context
 
-| 指标 / Metric | 关注点 / What to observe |
-| --- | --- |
-| GM 错误请求检定 / Invalid GM checks | 不必要或协议错误的检定次数 |
-| GM 替玩家行动 / GM taking player agency | GM 是否替玩家决定行动 |
-| Actor 越权 / Actor overreach | 未经裁定宣布结果、使用越权知识 |
-| Auditor 质量 / Auditor quality | 误报、漏报和 Schema 重试 |
-| 运行成本 / Runtime cost | 每轮延迟、token 和估算成本 |
-| 剧情流动性 / Narrative flow | 剧情停滞次数 |
+1. 将 `GMPlan` 和 `GMResolution` 变成显式协议，runtime 拒绝 resolution 修改 plan 的 check/stakes；
+2. 明确 provisional、committed、diagnostic 三类数据；
+3. 为 `TurnTransaction` 增加 `turn_started`/`turn_aborted`/`turn_committed` 语义和恢复测试；
+4. provider timeout、schema error、audit rejection 的重试预算和退避策略固定化；
+5. 100 回合 Fake Agent 故障注入：无重复骰点、重复提交、半完成回合或 version divergence。
 
-#### C. 单模型基线 | Single-model baseline
+### 4.2 Story context
 
-用同一个场景让单一模型同时承担 GM 和全部 NPC，与 runtime 版本对照。重点比较：
+1. 为 compiler 增加每个阶段的错误恢复和损坏 checkpoint 测试；
+2. 为 StoryStore 增加进程中断、重复 commit 和 request-id 冲突测试；
+3. 明确 branch fork point、ancestor event projection 和 branch-local request-id 语义；
+4. 对 `StoryBundle` 做 schema version/migration policy，不在 runtime 中静默接受未知 schema；
+5. 将编译器输出质量分成结构完整性、source evidence 完整性和语义抽样评估，不把 LLM 文本“看起来合理”当作验收标准。
 
-Run the same scenario with one model acting as GM and all NPCs, then compare it with the runtime version. Compare:
+### M2 退出条件
 
-- 世界事实一致性 / world-fact consistency；
-- NPC 知识隔离 / NPC knowledge isolation；
-- 玩家决策权 / player agency；
-- 随机结果对剧情的实际影响 / whether randomness changes outcomes；
-- 剧情偏离预设方向的能力 / ability to diverge from the planned path；
-- 错误是否可以定位到具体步骤 / whether failures are attributable to a concrete step。
+- 两个 context 各有 100 回合或等价阶段故障注入报告；
+- 重复 request 不重复调用 provider、不重复应用 patch、不重复提交事件；
+- provider/进程失败后只能从最后一个 committed state 恢复；
+- Story compiler 任意一个阶段失败后可续跑，已完成阶段不被无故重算；
+- Campaign 和 Story 的公开协议都能在不读取对方 domain 模块的情况下测试。
 
-### 3.2 Phase 0 退出条件 | Exit gate
+## 5. 应用服务和适配器收敛 | M3 Application services and adapters
 
-只有同时满足以下条件，才进入 Phase 1：
+**目标：** 把当前能工作的 CLI/Web vertical slice 变成长期可维护的 adapter 层，不改变 domain/runtime 契约。
 
-Proceed only when all of the following are true:
+### 5.1 拆分 Web composition root
 
-- 20 轮内没有不可恢复的状态损坏 / no unrecoverable state corruption within 20 turns；
-- 骰点确实改变后果，而不只是改变文案 / dice change consequences rather than wording；
-- Actor View 能有效限制秘密泄漏 / Actor View measurably limits secret leakage；
-- Spotlight 带来的收益大于额外复杂度 / spotlight benefits outweigh added complexity；
-- 多 Agent 流程至少在一项关键指标上优于单模型基线 / the multi-agent flow beats the single-model baseline on at least one key metric。
-
-## 4. 分阶段路线 | Phased roadmap
-
-### Phase 1：加固 MVP 可靠性 | Harden MVP reliability (`v0.2`)
-
-**目标 / Goal：** 将原型提升为可信、可恢复、可测试的运行时。
-
-Turn the prototype into a trustworthy, recoverable, and testable runtime.
-
-#### 4.1 固化两阶段 GM 协议 | Formalize the two-stage GM protocol
-
-明确禁止模型在看到骰点后修改检定条件：
-
-Prevent the model from changing the check after seeing the roll:
+将 `web/app.py` 拆为：
 
 ```text
-GMPlan
-  -> 是否需要检定
-  -> 三档 stakes
-  -> 不包含事后结果
-
-DiceEngine
-  -> 生成 2d6
-
-GMResolution
-  -> 只能解释已生成的结果
-  -> 不能改变原始 stakes
+web/
+  app.py              # FastAPI factory, middleware, exception policy
+  campaign_routes.py  # legacy Campaign HTTP adapter
+  story_routes.py     # Story HTTP adapter
+  resource_routes.py  # ResourceLibrary adapter
+  services.py         # request -> application workflow wiring
 ```
 
-协议层正式拆分 `GMPlan` 与 `GMResolution`，并在 Schema 和 runtime 层同时验证两阶段边界。
+路由只做输入验证、错误映射和 response serialization；状态变更必须调用 context application service。
 
-Make `GMPlan` and `GMResolution` first-class schemas and enforce the boundary in both schemas and runtime code.
+### 5.2 稳定 CLI/workflow 边界
 
-#### 4.2 建立真正的回合事务 | Define a real turn transaction
+- 保留现有命令作为兼容入口；
+- 将 `narrative.workflow` 的 compile/session façade 迁移到明确的 application service 模块，旧 import 路径保留兼容转发；
+- CLI 不承担 provider 重试、patch 校验或存储 schema 逻辑；
+- 为每个 CLI 命令增加最小 smoke test，而不是用端到端脚本代替产品接口。
 
-完整回合应具有明确边界：
+### 5.3 安全门禁
+
+在任何公开监听或客户端 adapter 之前必须具备：
+
+- authentication/authorization；
+- request size、rate limit、timeout 和 cancellation；
+- secrets 不进日志、event payload 或 debug response；
+- Story author-only facts、Campaign hidden facts 和 CoT 不进入公开 transcript；
+- branch/session/resource 的 ownership 检查。
+
+## 6. Story Mode 产品化 | M4 Story runtime
+
+**前置条件：** M2 的 Story reliability gate 通过；不以新增前端替代 runtime 验收。
+
+### 6.1 场景与时间线
+
+- 在 `StorySessionState` 内增加显式 scene/anchor/timeline 概念；
+- choice 和 freeform 统一为 `DecisionInput`，但保留“自由行动默认不推进 beat”的权威规则；
+- branch tree、fork、replay/projection 形成可测试的 timeline service；
+- `CanonPolicy`（strict/guided/sandbox）影响可用 decision 和事实投影，而不是由模型自由解释；
+- 支持从 Story Bundle 的 source evidence 定位当前 beat/arc 的上下文。
+
+### 6.2 互动写手协议
+
+固定单次回合合同：
 
 ```text
-turn_started
-  -> model calls
-  -> dice
-  -> patch validation
-  -> actor output
-  -> audit
-  -> turn_committed
+Input:
+  canon policy / scene / session / player identity / player knowledge / decision
+
+Runtime resolves:
+  target beat / allowed effects / allowed reveals / next choices / terminal state
+
+Author returns:
+  narration only (plus optional diagnostic metadata)
+
+Runtime commits:
+  validated state patch + event set + snapshot + idempotent result
 ```
 
-区分三类数据：
+任何扩展字段都必须说明权威方和验证方；不能因为模型能生成 JSON 就把 beat、facts 或 timeline ownership 交给模型。
 
-- **Provisional events**：尚未完成闭环，不构成历史；
-- **Committed events**：已成为权威历史；
-- **Diagnostic traces**：仅用于调试，不参与状态恢复。
+### M4 退出条件
 
-增加 `turn_started`、`turn_aborted`、`turn_committed`，恢复时只承认已经完成闭环的 `turn_committed`。
+- Story Mode 可以完成一篇多场景短篇，choice/freeform/branch/reload 均有回归测试；
+- 分支不改变 parent snapshot，ancestor event projection 可重复；
+- author 输出 malformed、越权 patch、越权 reveal、错误 beat 时，状态不推进；
+- 公开 HTTP response 不泄漏 author-only/private state；
+- 有一个专用 Story UI 或成熟 API client，再考虑 SillyTavern adapter。
 
-Separate provisional events, committed events, and diagnostic traces. Add `turn_started`, `turn_aborted`, and `turn_committed`; recovery must trust only completed committed turns.
+## 7. Campaign 扩展 | M5 Campaign multi-actor
 
-#### 4.3 幂等性和失败恢复 | Idempotency and failure recovery
+**前置条件：** M2 Campaign reliability gate 通过，且不再把单场景一 Actor 的假设藏在 runtime 中。
 
-每个玩家请求携带 `request_id`、`turn_id`、`attempt_id`。重复提交同一 `request_id` 时，runtime 返回已有结果，不重复掷骰、调用 Actor 或应用 Patch。
+- 多 Actor 实例化：每个 Actor 有独立 `ActorView`、model profile、knowledge projection；
+- Knowledge graph：truth、belief、player knowledge、source、acquired turn、visibility 分离；
+- Spotlight scheduler：Player/GM/Actor/Shared/Interrupt，连续输出和归还策略由 runtime 控制；
+- GM 只能提出 actor dispatch，不能由 Actor 自行获得发言权；
+- 至少 3 个 Actor、30 回合、无私有知识串线、无未获 spotlight 角色擅自发言。
 
-Each player request carries `request_id`, `turn_id`, and `attempt_id`. Repeating a `request_id` returns the existing result without rerolling, re-invoking actors, or reapplying patches.
+这部分属于 Campaign context，不应通过修改 Story Bundle 或 Narrative runtime 来实现。
 
-错误策略：
+## 8. Provider、流式和外部客户端 | M6 Providers and clients
 
-| 故障 | 处理 |
-| --- | --- |
-| Schema error | 携带 validation error 重试一次 / retry once with the validation error |
-| Provider timeout | 指数退避重试 / retry with exponential backoff |
-| Auditor rejection | 按违规说明让 Actor 重演一次 / replay the Actor once with the violations |
-| 第二次仍失败 | 中止回合，不提交状态 / abort the turn without committing state |
-| 进程崩溃 | 从最后一个 committed turn 恢复 / resume from the last committed turn |
+在 M2/M3 后再做：
 
-#### 4.4 可观察性 | Observability
+1. 在 `llm` 共享内核上增加明确的 provider capability（JSON mode、thinking control、streaming、tool calling）；
+2. Campaign agent adapter 和 Story author adapter 分别声明所需 capability；
+3. 流式输出只作为 UX/diagnostic channel，公开正文仍由 runtime commit 产生；
+4. 实现 OpenAI-compatible `/v1/chat/completions` facade；
+5. 再实现 SillyTavern adapter，不让 SillyTavern transcript 成为权威状态。
 
-先输出 JSON Lines，不急于引入完整平台。每次 Agent 调用至少记录：
+云端 GM、本地 Actor、KoboldCpp 等属于 provider deployment 选择，不能反向改变 domain 权限模型。
 
-Start with JSON Lines rather than a full observability platform. Each agent call should record:
+## 9. 延后项和删除策略 | Deferred and deletion policy
 
-```json
-{
-  "campaign_id": "station-zero",
-  "turn_id": "turn-0023",
-  "agent": "gm",
-  "model": "provider:model",
-  "latency_ms": 2310,
-  "input_tokens": 4021,
-  "output_tokens": 382,
-  "retry_count": 0,
-  "estimated_cost": 0.0021
-}
+### 保留为 TODO，不现在实现
+
+- embedding/vector memory；先完成结构化 fact/event/beat retrieval；
+- ruleset plugin marketplace；先稳定 `pbta-minimal` 和 domain port；
+- 完整 regenerate/reroll/rollback；先完成 branch/fork/replay 语义；
+- Story 专用浏览器页面；先稳定 HTTP/application service contract；
+- OpenAI/SillyTavern public adapter；先完成 auth/security/streaming contract。
+
+### 已删除
+
+- Odyssey detached launcher、merge probe、status script、bundle verifier：一次性实验运维代码，不属于产品架构。
+
+### 允许删除的条件
+
+任何旧代码只有在以下条件同时满足时才能删除：
+
+1. 已有替代 application/domain API；
+2. 旧 CLI/HTTP/import path 有迁移或兼容测试；
+3. Story compiler/runtime/Campaign runtime 回归均通过；
+4. 文档、examples 和配置不再引用旧路径；
+5. 删除原因写入 changelog/commit，不靠隐式清理。
+
+## 10. 统一质量门禁 | Quality gates
+
+每个跨边界变更必须运行：
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check .
+.venv/bin/python -m compileall -q src tests
+git diff --check
 ```
 
-**交付物 / Deliverables：** `v0.2.0`、两阶段 GM 协议、原子回合提交、请求幂等性、可恢复错误路径、Agent 成本报告、50 轮 Fake Agent 稳定性测试和云端 Provider mock 测试。
-
-**验收 / Acceptance：** 连续执行 100 个 Fake Agent 回合，随机注入 Provider 超时、非法 Patch、Audit 拒绝和进程中断；最终不存在重复骰点、重复提交、半完成回合或状态版本错乱。
-
-Run 100 Fake Agent turns with injected timeouts, invalid patches, audit rejections, and process interruptions. There must be no duplicate rolls, duplicate commits, half-completed turns, or version divergence.
-
-### Phase 2：多 Actor 与知识隔离 | Multiple actors and knowledge isolation (`v0.3`)
-
-**目标 / Goal：** 从“GM 加一个 NPC”扩展为真正的多角色 TRPG，同时保持统一协议。
-
-Expand from one GM plus one NPC into a multi-character TRPG without fragmenting the actor protocol.
-
-1. **Actor 实例化 / Actor instances**：保持通用 `ActorAgent` 协议，允许多个独立实例；每个实例配置 `actor_id`、`model_profile`、`character_file`、temperature 和 token 上限。多个角色可以共享同一模型权重。
-2. **Knowledge Graph**：将角色知识建模为可追踪事实：`fact_id`、`proposition`、`truth_status`、`source`、`acquired_turn`、`confidence`、`visibility`、`supersedes`。世界真相、角色信念和玩家知识必须分开。
-3. **Spotlight Scheduler**：支持 `Player`、`GM`、`Actor`、`Shared`、`Interrupt`；同一 Actor 最多连续两次，直接被问话的角色优先，`Interrupt` 必须有触发理由，GM 裁定后必须交还叙事权。
-4. **确定性调度 / Deterministic dispatch**：GM 返回 `primary_actor`、`optional_reactors`、`spotlight_order` 和 `observations_by_actor`；runtime 串行调用 Actor，Actor 不自行决定谁发言。
-
-**退出条件 / Exit gate：** 至少 3 个 Actor 运行 30 轮；没有私有知识串线；角色语言风格可区分；未获 Spotlight 的角色不擅自发言；Shared 场景不退化为单一模型代写所有人。
-
-Run at least three actors for 30 turns with no private-knowledge crossover, distinct voices, no unsolicited speech, and no single-model takeover of shared scenes.
-
-### Phase 3：分支、重生成与回滚 | Branching, regeneration, and rollback (`v0.4`)
-
-**目标 / Goal：** 建立适合 TRPG 的时间线语义，而不是覆盖旧历史。
-
-Introduce explicit timeline semantics instead of overwriting history.
-
-| 操作 | 保持内容 | 新增内容 |
-| --- | --- | --- |
-| Performance Regeneration | 骰点、State Patch、世界结果 | 仅重生成 Actor 或 GM 的表达 / only regenerated performance |
-| Adjudication Regeneration | 玩家输入；默认复用骰点 | 回滚未提交裁定并重新调用 GM / a new uncommitted adjudication |
-| Reroll | 玩家输入和既有历史 | 消耗可配置资源，生成新骰点和新分支 / new roll and branch at a resource cost |
-
-事件支持 `campaign_id`、`branch_id`、`parent_branch_id`、`forked_from_event_id`。Branch 只能从历史点继续追加，不能修改旧事件。
-
-Events carry branch identity and can only append from a fork point. Old events remain immutable.
-
-状态通过 `state = replay(snapshot, events, branch_id)` 投影，支持平行剧情、失败场景重试、固定骰点下比较模型和 prompt A/B 测试。
-
-Project state through replay to support parallel stories, retries, fixed-roll model comparisons, and prompt A/B tests.
-
-**交付物 / Deliverables：** Branch Tree、Performance Regeneration、Reroll 资源机制、任意回合回滚和固定骰点模型对比工具。
-
-### Phase 4：场景、剧情框架与长期记忆 | Scenes, story framework, and long-term memory (`v0.5`)
-
-**目标 / Goal：** 从单场景扩展到完整短篇战役，同时不把剧情变成单一路径脚本。
-
-Expand to short campaigns without turning the story into a single forced path.
-
-- **Scene State Machine**：场景包含 `entry_conditions`、`active_pressures`、`available_actors`、`location`、`visible_objects`、`completion_conditions` 和 `possible_transitions`；GM 只能提议切换，runtime 验证目标是否可达。
-- **Story Beat**：Beat 是约束和机会，不是固定脚本；一个节点允许多种线索或揭示方式，避免 GM 强推唯一线索。
-- **四层记忆 / Four memory layers**：`Canonical State`、`Event Log`、`Scene Summary`、`Retrieved Memories`。优先用 `actor_ids`、`location_ids`、`fact_ids`、`event_types`、`story_beat_ids` 做结构化检索，必要时再引入 embedding。
-- **Summary Agent**：只能提出摘要、候选事实、关系变化和未解决线索；所有新事实必须与事件日志交叉验证，摘要不能直接成为 Canonical State。
-
-The summary agent may propose context, but the event log remains the authority for canonical facts.
-
-### Phase 5：HTTP API 与 SillyTavern 适配 | HTTP API and SillyTavern adapter (`v0.6–v0.7`)
-
-**目标 / Goal：** 提供成熟客户端，同时保持核心 runtime 解耦。
-
-Expose a mature client surface without coupling the runtime core to a specific frontend.
-
-先实现原生 FastAPI：
-
-```text
-POST /campaigns
-POST /campaigns/{id}/turns
-GET  /campaigns/{id}/state
-GET  /campaigns/{id}/events
-GET  /campaigns/{id}/branches
-POST /campaigns/{id}/regenerate
-POST /campaigns/{id}/reroll
-POST /campaigns/{id}/rollback
-```
-
-再提供薄的 OpenAI 兼容层：
-
-```text
-POST /v1/chat/completions
-GET  /v1/models
-```
-
-SillyTavern 只看到 `model = trpg-runtime`；内部仍执行完整 agentic loop。SSE 第一版只输出玩家可见的 GM narration、公开骰点和 Actor performance，Debug 信息和私有状态不得进入正文。
-
-SillyTavern should see only `model = trpg-runtime`. The first SSE implementation exposes public narration, public dice, and actor performance only; debug data and private state stay out of the transcript.
-
-客户端 transcript 不等于 authoritative state。用户编辑旧消息时，必须创建分支或触发明确的 runtime 操作，不能静默改写历史。
-
-The client transcript is not authoritative state. Editing an old message must create a branch or invoke an explicit runtime operation.
-
-### Phase 6：云端与本地模型混合 | Hybrid cloud and local models (`v0.8`)
-
-**目标 / Goal：** 验证“云端 GM + 本地 Actor”的最初设想，同时保持 Provider 可替换。
-
-Validate the cloud-GM plus local-actor design through replaceable providers.
-
-统一 Provider 接口，支持：
-
-```text
-CloudGMProvider
-OpenAICompatibleProvider
-KoboldCppProvider
-FakeProvider
-```
-
-默认分工：
-
-| Agent | 推荐配置 |
-| --- | --- |
-| GM | 强云端模型、低温度、长上下文、强结构化输出 |
-| Actor | 本地 RP 模型、较高温度、局部视图、角色声音优先 |
-| Auditor | 便宜的小模型或规则模型、极低温度 |
-| Summary | 便宜的长上下文模型 |
-
-需要专门处理本地模型的 JSON 不稳定、Chat/Text Completion 模板差异、正文与结构数据分离、KoboldCpp 超时/断线、Windows 休眠、缺少严格 tool calling 和高温采样导致的 Schema 损坏。
-
-Local integration must address unstable JSON, chat/completion template differences, timeouts, sleep/wake, missing strict tool calling, and schema damage at higher temperatures. A lightweight cloud parser or explicit JSON envelope may be used as a fallback, without granting the local Actor state authority.
-
-### Phase 7：规则系统插件化 | Pluggable rulesets (`v0.9`)
-
-**目标 / Goal：** 从简化 PbtA 演进为可替换规则包，同时不让规则侵入 Agent 和持久化层。
-
-Evolve from minimal PbtA into replaceable rules packages without leaking rules into agents or persistence.
-
-```text
-Ruleset
-  ├── classify_action()
-  ├── validate_check()
-  ├── roll()
-  ├── resolve_outcome_band()
-  ├── validate_consequence()
-  └── available_player_resources()
-```
-
-首批规则包：
-
-- `pbta-minimal`（默认：`2d6`、`10+` 完全成功、`7-9` 付出代价、`6` 失败）
-- `pbta-moves`
-- `fate-light`
-- `freeform-narrative`
-
-The current minimal PbtA rules remain the default package.
-
-### Phase 8：评估框架与回归测试 | Evaluation and regression (`v1.0`)
-
-**目标 / Goal：** 证明架构改善了 RP，而不是只增加了模型调用次数。
-
-Demonstrate better roleplay control and consistency, not merely more model calls.
-
-自动指标：
-
-| 类别 | 指标 / Metrics |
-| --- | --- |
-| 权限与知识 / Authority and knowledge | 权限违规率、秘密泄漏率、未经裁定成功率 |
-| 状态与剧情 / State and narrative | 状态矛盾率、剧情停滞率、Actor 风格混淆率 |
-| 运行成本 / Runtime | 每轮重试次数、延迟、token 和成本 |
-
-固定基准场景至少覆盖：
-
-- 角色被要求使用不知道的信息；
-- 玩家偏离主线；
-- 预定剧情与骰子失败冲突；
-- 两个 Actor 争夺发言权；
-- 角色撒谎但世界真相不变；
-- Performance Regeneration 不得改变骰点；
-- Provider 超时后不得重复提交；
-- 从历史分支恢复后状态必须一致。
-
-对照实验：
-
-```text
-A. 单一云端模型直接 RP
-B. GM + Actor，但没有规则 runtime
-C. 完整 TARI runtime
-D. 云端 GM + 本地 Actor
-```
-
-只有当 C 或 D 在一致性、控制权和体验上有明确优势，项目才证明了自己的价值。
-
-The project proves its value only when C or D shows a clear advantage in consistency, agency, and experience.
-
-## 5. 版本节奏 | Release cadence
-
-| 版本 | 主要范围 / Scope |
-| --- | --- |
-| `v0.1` | 当前 MVP / current MVP |
-| `v0.2` | 回合事务、幂等性、错误恢复 / turn transactions, idempotency, recovery |
-| `v0.3` | 多 Actor、Knowledge Graph、Spotlight 调度 / multiple actors, knowledge graph, spotlight scheduling |
-| `v0.4` | Branch、Regenerate、Reroll、Rollback |
-| `v0.5` | 多场景、Story Beats、长期记忆 / multi-scene stories, beats, long-term memory |
-| `v0.6` | FastAPI 与 OpenAI 兼容接口 / FastAPI and OpenAI-compatible API |
-| `v0.7` | SillyTavern 基础接入 / basic SillyTavern integration |
-| `v0.8` | 云端 GM + 本地 KoboldCpp Actor |
-| `v0.9` | 可插拔规则包与评估套件 / pluggable rulesets and evaluation suite |
-| `v1.0` | 可稳定完成短篇多场景战役 / reliable short multi-scene campaigns |
-
-版本号是能力里程碑，不是日期承诺。
-
-Version numbers are capability milestones, not calendar commitments.
-
-## 6. 近期优先级 | Immediate priorities
-
-下一轮严格按以下顺序推进：
-
-1. 验证核心 loop，并完成单模型基线对照；
-2. 固化 `GMPlan` / `GMResolution`；
-3. 实现原子回合事务和 `turn_aborted`；
-4. 增加 `request_id` 幂等性；
-5. 完善 Agent 失败与 Auditor 重试；
-6. 完成 100 回合故障注入验收；
-7. 通过 Phase 0/1 退出条件后，再开始多 Actor；
-8. 最后接入 SillyTavern 和本地模型。
-
-The next milestone is deliberately reliability-first: validate the core loop, enforce the two-stage GM protocol, make turns atomic and idempotent, test fault recovery, and only then add more actors or clients.
-
-## 7. 成功定义 | Definition of success
-
-TARI 在 `v1.0` 的成功标准是：能够在不静默改写权威历史的前提下，稳定完成多场景短篇战役；玩家拥有清晰的决策权，角色只使用其可见知识，骰点改变真实后果，故障可以恢复，且评估结果持续优于单模型基线。
-
-At `v1.0`, TARI succeeds when it can complete short multi-scene campaigns without silently rewriting authoritative history: player agency is clear, actors use only visible knowledge, dice change real consequences, failures are recoverable, and evaluations consistently beat the single-model baseline.
+涉及 Story compiler 时，还要验证：
+
+- `manifest.status` 与阶段 checkpoint；
+- `bundle.yaml` 可由正式 loader 加载；
+- source SHA/evidence/实体事实关系引用存在；
+- 至少一次从 cache 续跑；
+- 不发送真实 token、密钥或用户数据到未明确授权的外部 endpoint。
+
+路线图的每个阶段都必须同时给出功能结果、失败行为和回归证据；没有退出条件的功能先不进入实现。

@@ -19,6 +19,7 @@ from ..agents import AgentSuite, FakeAgentSuite, PydanticAISuite
 from ..composer import ComposeRequest, build_preview, compose_state, create_campaign
 from ..config import RuntimeConfig, load_runtime_config
 from ..gm_docs import RULES_PRESETS
+from ..llm import resolve_llm_settings
 from ..narrative import (
     CanonPolicy,
     FakeNarrativeAuthor,
@@ -27,7 +28,6 @@ from ..narrative import (
     OpenAINarrativeAuthor,
     PlayerIdentity,
     StoryStore,
-    resolve_llm_settings,
 )
 from ..resource_library import ResourceLibrary
 from ..runtime import TurnOrchestrator

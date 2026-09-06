@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from trpg_runtime.llm import LLMSettings
 from trpg_runtime.narrative import compile_bundle
-from trpg_runtime.narrative.providers import LLMSettings
 from trpg_runtime.story import load_bundle
 from trpg_runtime.story.decomposer import (
     SOURCE_PLAN_VERSION,
