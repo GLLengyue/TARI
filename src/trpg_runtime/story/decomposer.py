@@ -692,6 +692,10 @@ async def _complete_text(
     last_error: Exception | None = None
     last_raw = ""
     for attempt in range(3):
+        if attempt:
+            # Fixed backoff so transient provider failures (rate limits, 5xx)
+            # are not retried in a tight loop under parallel chapter calls.
+            await asyncio.sleep(min(4.0 * attempt, 12.0))
         current = list(messages)
         if attempt:
             current.append(
@@ -725,6 +729,8 @@ async def _complete_json(
     last_error: Exception | None = None
     last_raw: str = ""
     for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(min(4.0 * attempt, 12.0))
         current = list(messages)
         if attempt:
             current.append(
@@ -1169,7 +1175,7 @@ async def _extract_one_card(
             author,
             _chapter_prompt(document, chapter, text, index, len(windows)),
             "第" + str(chapter.ordinal) + "章事实卡",
-            3500,
+            8000,
         )
         parts.append(_normalise_card(payload, chapter, document.sha256))
     return _merge_card_parts(parts, chapter, document.sha256)
