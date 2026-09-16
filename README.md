@@ -190,7 +190,17 @@ CLI
 
 The runtime never treats model prose as authoritative state. Structured patches must pass validation before they are committed.
 
-详见 [架构 | Architecture](docs/architecture.md)、[协议 | Protocol](docs/protocol.md) 和 [安全 | Security](docs/security.md)。
+上图是传统 Campaign 路径。Story Mode 不在其中：它是另一个 bounded context，拥有自己的状态、事件表和分支语义，只与 Campaign 共享 `persistence` / `llm` 基础设施：
+
+```text
+TXT/Markdown -> source plan -> chapter cards -> rolling arcs -> world knowledge
+             -> structures -> StoryBundle(+evidence)   # 离线、可恢复
+StoryBundle -> NarrativeOrchestrator -> choice/freeform 解析
+             -> author 只写 prose -> 运行时校验 beat/reveal/patch
+             -> StoryStore 原子提交事件+快照+幂等结果     # 在线
+```
+
+完整边界、依赖方向与禁止事项见 [架构 | Architecture](docs/architecture.md)；回合协议见 [协议 | Protocol](docs/protocol.md)；本地 HTTP 控制台当前的 unprotected 面与公开前提见 [安全 | Security](docs/security.md)。
 
 ## 当前边界 | Current limitations
 
@@ -207,14 +217,15 @@ The runtime never treats model prose as authoritative state. Structured patches 
 
 The roadmap follows “prove the core loop first, harden reliability next, then expand actors and clients.” Each phase has an exit gate; more model calls are not a substitute for quality.
 
-主要里程碑：
+主要里程碑（与 [技术路线图](docs/technical-roadmap.md) 的 M0–M6 一致，版本号表示能力阶段，不承诺日期）：
 
-Key milestones:
+Key milestones (aligned with M0–M6 in the [technical roadmap](docs/technical-roadmap.md); version labels are capability milestones, not calendar promises):
 
-1. **v0.2**：回合事务、幂等性、错误恢复和可观察性 / turn transactions, idempotency, failure recovery, and observability
-2. **v0.3-v0.5**：多 Actor、知识图谱、Spotlight 调度、分支和长期记忆 / multiple actors, knowledge graph, spotlight scheduling, branches, and long-term memory
-3. **v0.6-v0.8**：原生 HTTP API、SillyTavern 基础接入和云端 GM + 本地 Actor / native HTTP API, basic SillyTavern integration, and cloud GM plus local actors
-4. **v0.9-v1.0**：可插拔规则包、评估框架和可稳定完成的多场景短篇战役 / pluggable rulesets, evaluation, and stable multi-scene short campaigns
+1. **M0–M1 / v0.1**（已完成）：Story Mode vertical slice、可恢复拆书编译、共享 persistence/llm 内核 / completed Story Mode slice, resumable compilation, shared persistence/llm kernel
+2. **M2 / v0.2**：两个上下文的可靠性合同化——回合事务、幂等性、故障注入与恢复 / reliability contracts for both contexts: turn transactions, idempotency, failure injection, recovery
+3. **M3**：应用服务与适配层收敛（拆分 Web composition root、公开前的认证/限流/所有权） / application services and thin adapters, security gates before any public exposure
+4. **M4**：Story runtime 产品化（scene/anchor/timeline、统一 DecisionInput）；M5：Campaign 多 Actor、知识图谱、Spotlight 调度
+5. **M6**：provider capability 声明、流式 UX 通道、OpenAI-compatible facade 与 SillyTavern adapter / provider capabilities, non-authoritative streaming, then external adapters
 
 ## 许可证 | License
 
