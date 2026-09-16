@@ -511,37 +511,41 @@ def story_play(
 
     console.print(Panel(_story_prompt(story_bundle, state), title=state.title))
     _print_story_choices(state)
-    while True:
-        if state.status == "completed":
-            console.print("[bold green]Story completed.[/bold green]")
-            break
-        text = console.input("[bold cyan]story> [/bold cyan]").strip()
-        if text in {"/quit", "/exit"}:
-            break
-        if text.startswith("/branch "):
-            new_branch_id = text.partition(" ")[2].strip()
-            try:
-                state = runtime.fork(state, new_branch_id)
-            except Exception as exc:
-                console.print(f"[red]Branch failed: {exc}[/red]")
+    try:
+        while True:
+            if state.status == "completed":
+                console.print("[bold green]Story completed.[/bold green]")
+                break
+            text = console.input("[bold cyan]story> [/bold cyan]").strip()
+            if text in {"/quit", "/exit"}:
+                break
+            if text.startswith("/branch "):
+                new_branch_id = text.partition(" ")[2].strip()
+                try:
+                    state = runtime.fork(state, new_branch_id)
+                except Exception as exc:
+                    console.print(f"[red]Branch failed: {exc}[/red]")
+                    continue
+                console.print(
+                    f"Switched to branch [bold]{state.branch_id}[/bold] from "
+                    f"turn {state.turn_number}."
+                )
+                _print_story_choices(state)
                 continue
-            console.print(
-                f"Switched to branch [bold]{state.branch_id}[/bold] from turn {state.turn_number}."
-            )
+            if not text:
+                continue
+            incoming = _story_input_from_text(state, text)
+            try:
+                state, result = asyncio.run(
+                    runtime.process_turn(state, incoming, request_id=str(uuid.uuid4()))
+                )
+            except Exception as exc:
+                console.print(f"[red]Story turn failed: {exc}[/red]")
+                continue
+            console.print(Panel(result.narrative, title=f"Turn {result.turn_number}"))
             _print_story_choices(state)
-            continue
-        if not text:
-            continue
-        incoming = _story_input_from_text(state, text)
-        try:
-            state, result = asyncio.run(
-                runtime.process_turn(state, incoming, request_id=str(uuid.uuid4()))
-            )
-        except Exception as exc:
-            console.print(f"[red]Story turn failed: {exc}[/red]")
-            continue
-        console.print(Panel(result.narrative, title=f"Turn {result.turn_number}"))
-        _print_story_choices(state)
+    finally:
+        asyncio.run(runtime.author.aclose())
 
 
 @app.command("story-branch")

@@ -79,15 +79,14 @@ def _make_client(tmp_path: Path, library: ResourceLibrary | None = None):
 
 def test_story_resources_are_listed(tmp_path: Path):
     _make_bundle(tmp_path)
+
     async def run() -> None:
         async with _make_client(tmp_path) as client:
             res = await client.get("/api/resources")
             assert res.status_code == 200
             data = res.json()
             assert "stories" in data
-            assert any(
-                item.get("story_id") == "web-lantern" for item in data["stories"]
-            )
+            assert any(item.get("story_id") == "web-lantern" for item in data["stories"])
 
     asyncio.run(run())
 
@@ -95,6 +94,7 @@ def test_story_resources_are_listed(tmp_path: Path):
 def test_story_session_create_state_turn_branch(tmp_path: Path):
     _make_bundle(tmp_path)
     library = ResourceLibrary([tmp_path])
+
     async def run() -> None:
         async with _make_client(tmp_path, library=library) as client:
             create = await client.post(
@@ -150,11 +150,10 @@ def test_story_session_create_state_turn_branch(tmp_path: Path):
 
 def test_story_session_rejects_unknown_story(tmp_path: Path):
     _make_bundle(tmp_path)
+
     async def run() -> None:
         async with _make_client(tmp_path) as client:
-            res = await client.post(
-                "/api/story/sessions", json={"story_id": "missing"}
-            )
+            res = await client.post("/api/story/sessions", json={"story_id": "missing"})
             assert res.status_code == 404
             assert "unknown story" in res.json()["detail"]
 
@@ -163,6 +162,7 @@ def test_story_session_rejects_unknown_story(tmp_path: Path):
 
 def test_invalid_choice_aborts_without_advancing(tmp_path: Path):
     _make_bundle(tmp_path)
+
     async def run() -> None:
         async with _make_client(tmp_path) as client:
             await client.post(
@@ -179,3 +179,52 @@ def test_invalid_choice_aborts_without_advancing(tmp_path: Path):
             assert again.json()["current_beat_id"] == "arrival"
 
     asyncio.run(run())
+
+
+def test_llm_story_author_is_closed_after_a_turn(tmp_path: Path, monkeypatch) -> None:
+    """A non-fake story turn must release its provider client, success or failure."""
+    import trpg_runtime.web.app as web_app
+    from trpg_runtime.narrative import FakeNarrativeAuthor
+
+    _make_bundle(tmp_path)
+    closed: list[bool] = []
+
+    class ClosingAuthor(FakeNarrativeAuthor):
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    def factory(fake: bool):
+        assert fake is False
+        return ClosingAuthor()
+
+    monkeypatch.setattr(web_app, "_story_author_for", factory)
+
+    async def run() -> None:
+        async with _make_client(tmp_path) as client:
+            await client.post(
+                "/api/story/sessions",
+                json={"story_id": "web-lantern", "session_id": "web-3"},
+            )
+            turn = await client.post(
+                "/api/story/sessions/web-3/turns",
+                json={
+                    "choice_id": "trust",
+                    "input_mode": "choice",
+                    "fake": False,
+                    "request_id": "r-llm",
+                },
+            )
+            assert turn.status_code == 200, turn.text
+            bad = await client.post(
+                "/api/story/sessions/web-3/turns",
+                json={
+                    "choice_id": "invented",
+                    "input_mode": "choice",
+                    "fake": False,
+                    "request_id": "r-llm-bad",
+                },
+            )
+            assert bad.status_code == 400
+
+    asyncio.run(run())
+    assert closed == [True, True]

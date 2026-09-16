@@ -89,10 +89,7 @@ def _is_local_endpoint(base_url: str) -> bool:
     except ValueError:
         return False
     return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_unspecified
+        address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified
     )
 
 
@@ -263,9 +260,7 @@ class OpenAICompatibleClient:
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError("LLM response did not include a message body") from exc
         if isinstance(content, list):
-            return "".join(
-                str(part.get("text", "")) for part in content if isinstance(part, dict)
-            )
+            return "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
         return str(content)
 
     async def complete_text(

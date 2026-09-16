@@ -351,9 +351,12 @@ def test_compile_cache_requires_rebuild_after_source_or_settings_changes(
         rebuild=True,
     )
     assert rebuilt.chapter_count == 2
-    assert json.loads(Path(rebuilt.manifest_path).read_text(encoding="utf-8"))["settings"][
-        "parallelism"
-    ] == 1
+    assert (
+        json.loads(Path(rebuilt.manifest_path).read_text(encoding="utf-8"))["settings"][
+            "parallelism"
+        ]
+        == 1
+    )
 
 
 def _plan_payload(**overrides):
@@ -362,9 +365,7 @@ def _plan_payload(**overrides):
         "total_lines": 20,
         "content_start_line": 4,
         "content_end_line": 18,
-        "excluded_ranges": [
-            {"start_line": 1, "end_line": 3, "reason": "metadata"}
-        ],
+        "excluded_ranges": [{"start_line": 1, "end_line": 3, "reason": "metadata"}],
         "chapters": [
             {
                 "ordinal": 1,

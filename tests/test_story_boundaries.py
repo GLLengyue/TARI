@@ -39,9 +39,7 @@ def test_complete_json_requests_openai_json_mode() -> None:
         transport=httpx.MockTransport(handler),
     )
     try:
-        result = asyncio.run(
-            author.complete_json([{"role": "user", "content": "Return JSON."}])
-        )
+        result = asyncio.run(author.complete_json([{"role": "user", "content": "Return JSON."}]))
     finally:
         asyncio.run(author.aclose())
 
@@ -70,9 +68,7 @@ def test_local_json_request_disables_qwen_thinking() -> None:
         transport=httpx.MockTransport(handler),
     )
     try:
-        result = asyncio.run(
-            author.complete_json([{"role": "user", "content": "Return JSON."}])
-        )
+        result = asyncio.run(author.complete_json([{"role": "user", "content": "Return JSON."}]))
     finally:
         asyncio.run(author.aclose())
 
@@ -81,9 +77,7 @@ def test_local_json_request_disables_qwen_thinking() -> None:
     assert requests[0]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_workflow_default_store_honors_trpg_db_path(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_workflow_default_store_honors_trpg_db_path(tmp_path: Path, monkeypatch: Any) -> None:
     database = tmp_path / "workflow.db"
     monkeypatch.setenv("TRPG_DB_PATH", str(database))
 
@@ -95,9 +89,10 @@ def test_workflow_default_store_honors_trpg_db_path(
 
     assert state.session_id == "workflow-default-store"
     assert database.is_file()
-    assert workflow.StoryStore(database).load_story_snapshot(
-        state.session_id
-    ).session_id == state.session_id
+    assert (
+        workflow.StoryStore(database).load_story_snapshot(state.session_id).session_id
+        == state.session_id
+    )
 
 
 def test_source_plan_prompt_normalises_index_whitespace() -> None:

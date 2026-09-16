@@ -563,6 +563,8 @@ def create_app(
             )
         except Exception as exc:  # noqa: BLE001 - surface validation errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await author.aclose()
         return {
             "state": _serialize_story_state(new_state),
             "result": {

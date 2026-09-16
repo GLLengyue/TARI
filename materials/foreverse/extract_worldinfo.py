@@ -55,8 +55,7 @@ def convert(card_path: str | Path) -> dict[str, Any]:
     return {
         "name": str(book.get("name") or Path(card_path).stem),
         "description": (
-            "Extracted from a Foreverse character card; import with "
-            "`trpg new --world-info`."
+            "Extracted from a Foreverse character card; import with `trpg new --world-info`."
         ),
         "scan_depth": 4,
         "entries": converted,

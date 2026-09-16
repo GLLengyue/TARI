@@ -33,6 +33,10 @@ class NarrativeAuthor(ABC):
     ) -> NarrativeAuthorProposal:
         raise NotImplementedError
 
+    async def aclose(self) -> None:
+        """Release provider resources. Authors without a client may ignore this."""
+        return None
+
 
 class FakeNarrativeAuthor(NarrativeAuthor):
     """Offline author used by the vertical slice and regression tests."""
