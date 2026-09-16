@@ -13,7 +13,7 @@
 | Story context | 已有 source import、可恢复语义编译、Story Bundle、选择/自由行动/分支 runtime |
 | 共享内核 | `persistence.SQLiteStore` 和 `llm.OpenAICompatibleClient` 已落地 |
 | 客户端 | CLI 和本机 Web vertical slice；Story API 仅面向程序客户端，Web 控制台尚无 Story 页面；SillyTavern adapter 仍在路线图 |
-| 本轮验收 | Odyssey：24 章、6 弧、311 entities、352 facts、229 relationships；另在仓库外以 clean-room 方式一次跑通原文→Bundle（24/24 章、6 弧、`failures={}`、source SHA 一致）。全量 pytest/Ruff/mypy 通过；完整 Odyssey 编译因耗时且依赖本地模型服务，未纳入常规 pytest |
+| 本轮验收 | Odyssey：24 章、6 弧、311 entities、352 facts、229 relationships；另在仓库外以 clean-room 方式一次跑通原文→Bundle（24/24 章、6 弧、`failures={}`、source SHA 一致）。全量 pytest/Ruff/mypy 通过；完整 Odyssey 编译因耗时且依赖真实 LLM 端点，以 `TARI_E2E_COMPILE=1` 门控用例固化于 `tests/test_story_compile_e2e.py`（默认 skip，不进入常规 pytest） |
 
 架构基线见 [architecture.md](architecture.md)。核心决策是：**Campaign 和 Story 是两个 bounded context；共享 persistence/llm 基础设施，但不共享业务状态、事件语义或运行时继承关系。**
 

@@ -55,6 +55,16 @@ The Fake Author is still the default for offline demos. The real local-LLM E2E t
 TARI_E2E_LLM=1 pytest tests/test_story_e2e.py -q
 ```
 
+The full source-to-bundle compile E2E is a separate, longer opt-in gate that
+reproduces the clean-room acceptance run (source -> workspace -> loader-validated
+bundle -> one played turn). It asserts structural invariants only and runs fully
+detached under a temp directory:
+
+```bash
+TARI_E2E_COMPILE=1 pytest tests/test_story_compile_e2e.py -q
+# optional: TARI_E2E_SOURCE=/path/to/source.txt TARI_E2E_MAX_CHAPTERS=4
+```
+
 ## Importing a source document
 
 The current source compiler is deliberately conservative. It parses UTF-8 `.txt`/`.md`/`.markdown` files into chapters, hashes the original document and each chapter, records source evidence, and emits a source-preserving Story Bundle. It does **not** claim to infer characters, plot arcs, or semantic facts yet.
