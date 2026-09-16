@@ -45,9 +45,6 @@ trpg = "trpg_runtime.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/trpg_runtime"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/trpg_runtime/web/static" = "trpg_runtime/web/static"
-
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 addopts = "-q"
