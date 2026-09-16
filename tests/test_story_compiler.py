@@ -387,6 +387,124 @@ def _plan_payload(**overrides):
     return payload
 
 
+def test_compiled_artifacts_re_enter_the_shipped_import_paths(tmp_path: Path) -> None:
+    """A compiler workspace must be consumable through the real library + lorebook paths."""
+    from dataclasses import replace
+
+    from trpg_runtime.lorebook import apply_world_info, normalize_world_book
+    from trpg_runtime.resource_library import ResourceLibrary
+    from trpg_runtime.scenario import load_scenario
+
+    source = tmp_path / "lantern.md"
+    source.write_text(
+        "# The Lantern Gate\n\n"
+        "## Arrival\n\nAri reaches the gate at dusk.\n\n"
+        "## The Clue\n\nAri finds a mark beneath the lantern.\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "story-books" / "lantern-book"
+    result = compile_bundle(
+        source,
+        workspace,
+        story_id="lantern-book",
+        title="Lantern Book",
+        author=FakeCompilerAuthor(),
+        settings=replace(FakeCompilerAuthor.settings, timeout=600.0),
+        parallelism=2,
+        window_chapters=2,
+        max_arc_chapters=2,
+        world_batch_chapters=2,
+    )
+
+    # The workspace directory itself is the documented TARI_RESOURCE_DIRS target.
+    library = ResourceLibrary([workspace])
+    library.scan()
+    stories = [
+        item for item in library.by_kind("stories") if item.meta.get("story_id") == "lantern-book"
+    ]
+    assert len(stories) == 1, [item.meta for item in library.by_kind("stories")]
+    bundle = library.load_story_bundle(stories[0])
+    assert bundle.canon_facts
+    assert {item.ref_id for item in bundle.evidence} >= set(bundle.source.source_refs)
+
+    # The generated world-info imports through the same normalise/apply path as
+    # any other lorebook, so the "compatible with --world-info" claim is tested.
+    book = normalize_world_book(
+        json.loads(Path(result.world_info_path).read_text(encoding="utf-8"))
+    )
+    assert book["entries"]
+    state = apply_world_info(load_scenario("examples/station_zero.yaml"), book)
+    imported = [
+        entry["content"].strip()
+        for entry in book["entries"].values()
+        if str(entry.get("comment", "")).startswith("tari:public") and entry.get("content")
+    ]
+    assert imported
+    assert all(text in state.scene.public_facts for text in imported)
+
+    # A timeout-only settings change resumes without recalling the model and
+    # without demanding --rebuild.
+    cached = compile_bundle(
+        source,
+        workspace,
+        story_id="lantern-book",
+        title="Lantern Book",
+        author=NoCallCompilerAuthor(),
+        settings=replace(FakeCompilerAuthor.settings, timeout=90.0),
+        parallelism=2,
+        window_chapters=2,
+        max_arc_chapters=2,
+        world_batch_chapters=2,
+    )
+    assert cached.bundle_path == result.bundle_path
+    resumed = json.loads(Path(cached.manifest_path).read_text(encoding="utf-8"))
+    assert resumed["settings"]["timeout"] == 90.0
+    assert resumed["status"] == "complete"
+
+
+def test_legacy_timeout_fingerprint_is_adopted_not_rejected(tmp_path: Path) -> None:
+    """Workspaces recorded by the old timeout-inclusive algorithm must still resume."""
+    from trpg_runtime.story.decomposer import _legacy_settings_fingerprint
+
+    source = tmp_path / "lantern.md"
+    source.write_text(
+        "# The Lantern Gate\n\n"
+        "## Arrival\n\nAri reaches the gate at dusk.\n\n"
+        "## The Clue\n\nAri finds a mark beneath the lantern.\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "compiled"
+    compile_bundle(
+        source,
+        workspace,
+        story_id="lantern-compiled",
+        title="Compiled Lantern",
+        author=FakeCompilerAuthor(),
+        parallelism=2,
+        window_chapters=2,
+        max_arc_chapters=2,
+        world_batch_chapters=2,
+    )
+    manifest_path = workspace / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["settings_fingerprint"] = _legacy_settings_fingerprint(manifest["settings"])
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    resumed = compile_bundle(
+        source,
+        workspace,
+        story_id="lantern-compiled",
+        title="Compiled Lantern",
+        author=NoCallCompilerAuthor(),
+        parallelism=2,
+        window_chapters=2,
+        max_arc_chapters=2,
+        world_batch_chapters=2,
+    )
+    after = json.loads(Path(resumed.manifest_path).read_text(encoding="utf-8"))
+    assert after["settings_fingerprint"] != _legacy_settings_fingerprint(after["settings"])
+
+
 def test_normalise_source_plan_accepts_well_formed_payload():
     plan = _normalise_source_plan(_plan_payload(), payload_sha := "deadbeef" * 8, 20)
     assert isinstance(plan, SourceStructurePlan)
