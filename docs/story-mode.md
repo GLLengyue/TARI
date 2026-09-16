@@ -84,7 +84,7 @@ A workspace contains the original parsed source (`source.json`), `source_plan.js
 
 ## Story Mode HTTP vertical slice
 
-The local Web console lists validated Story Bundles under the `stories` resource kind. The initial Story Mode API is separate from the traditional campaign API and exposes:
+The Story Mode HTTP API is separate from the traditional campaign API. `GET /api/resources` returns validated Story Bundles under the `stories` key — note that the bundled single-page console does not yet render that key or provide a Story play view, so today this surface is for API clients, scripts, and tests. The endpoints are:
 
 - `GET /api/resources` — list available Story Bundles and other resources;
 - `POST /api/story/sessions` — create an atomic SQLite-backed session;

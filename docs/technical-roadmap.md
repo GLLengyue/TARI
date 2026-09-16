@@ -12,8 +12,8 @@
 | 传统 Campaign context | 已有可审计 TRPG loop、2d6、Spotlight、GM/Actor/Auditor、事件/快照/恢复 |
 | Story context | 已有 source import、可恢复语义编译、Story Bundle、选择/自由行动/分支 runtime |
 | 共享内核 | `persistence.SQLiteStore` 和 `llm.OpenAICompatibleClient` 已落地 |
-| 客户端 | CLI 和本机 Web vertical slice；尚无专用 Story 页面或 SillyTavern adapter |
-| 本轮验收 | Odyssey：24 章、6 弧、311 entities、352 facts、229 relationships；全量 pytest/Ruff 通过 |
+| 客户端 | CLI 和本机 Web vertical slice；Story API 仅面向程序客户端，Web 控制台尚无 Story 页面；SillyTavern adapter 仍在路线图 |
+| 本轮验收 | Odyssey：24 章、6 弧、311 entities、352 facts、229 relationships；另在仓库外以 clean-room 方式一次跑通原文→Bundle（24/24 章、6 弧、`failures={}`、source SHA 一致）。全量 pytest/Ruff/mypy 通过；完整 Odyssey 编译因耗时且依赖本地模型服务，未纳入常规 pytest |
 
 架构基线见 [architecture.md](architecture.md)。核心决策是：**Campaign 和 Story 是两个 bounded context；共享 persistence/llm 基础设施，但不共享业务状态、事件语义或运行时继承关系。**
 
@@ -219,9 +219,12 @@ Runtime commits:
 ```bash
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check .
+.venv/bin/mypy src
 .venv/bin/python -m compileall -q src tests
 git diff --check
 ```
+
+新增文件必须通过 `ruff format`；已有 14 个历史文件（早于 M0/M1）仍未格式化，本轮不扩大这份名单，也不在功能提交里顺手重排无关文件。`mypy src` 在 dev extra 装上 `types-PyYAML` 后应为 0 error。
 
 涉及 Story compiler 时，还要验证：
 
