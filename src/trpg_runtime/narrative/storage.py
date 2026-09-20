@@ -7,7 +7,11 @@ from typing import Any
 from uuid import uuid4
 
 from ..persistence import SQLiteStore
-from .domain import NarrativeTurnResult, StorySessionState
+from .domain import NarrativeTurnResult, ReadingBatch, ReadingRequest, ReadingRun, StorySessionState
+
+
+class StoryConflict(ValueError):
+    """A turn was based on a stale snapshot or conflicts with a committed turn."""
 
 
 class StoryStore(SQLiteStore):
@@ -60,6 +64,12 @@ class StoryStore(SQLiteStore):
                     turn_number INTEGER NOT NULL,
                     result_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                )"""
+            )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS story_reading_runs(
+                    request_id TEXT PRIMARY KEY,
+                    run_json TEXT NOT NULL
                 )"""
             )
 
@@ -137,6 +147,77 @@ class StoryStore(SQLiteStore):
                 is not None
             )
 
+    def open_reading_run(
+        self, session_id: str, branch_id: str, request: ReadingRequest, bundle_digest: str
+    ) -> ReadingRun:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT run_json FROM story_reading_runs WHERE request_id=?", (request.request_id,)
+            ).fetchone()
+            if row:
+                run = ReadingRun.model_validate_json(row[0])
+                if (
+                    run.session_id != session_id
+                    or run.branch_id != branch_id
+                    or run.request != request
+                    or run.bundle_digest != bundle_digest
+                ):
+                    raise StoryConflict("reading request_id belongs to a different request")
+                return run
+            row = conn.execute(
+                "SELECT state_json FROM story_snapshots WHERE session_id=? AND branch_id=?",
+                (session_id, branch_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown story session branch: {session_id}/{branch_id}")
+            state = StorySessionState.model_validate_json(row[0])
+            if state.bundle_digest != bundle_digest:
+                raise StoryConflict(
+                    "reading requires the session's pinned bundle; "
+                    "restore it or create a new session for a legacy save"
+                )
+            run = ReadingRun(
+                run_id=str(uuid4()),
+                request=request,
+                session_id=session_id,
+                branch_id=branch_id,
+                bundle_digest=bundle_digest,
+                start_turn=state.turn_number,
+                start_version=state.version,
+            )
+            conn.execute(
+                "INSERT INTO story_reading_runs(request_id,run_json) VALUES(?,?)",
+                (request.request_id, run.model_dump_json()),
+            )
+            return run
+
+    def finish_reading_run(self, run: ReadingRun, result: ReadingBatch) -> ReadingBatch:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT run_json FROM story_reading_runs WHERE request_id=?",
+                (run.request.request_id,),
+            ).fetchone()
+            saved = ReadingRun.model_validate_json(row[0])
+            if saved.result is not None:
+                return saved.result
+            row = conn.execute(
+                "SELECT state_json FROM story_snapshots WHERE session_id=? AND branch_id=?",
+                (run.session_id, run.branch_id),
+            ).fetchone()
+            state = StorySessionState.model_validate_json(row[0])
+            if state.version != result.version or state.turn_number != result.turn_number:
+                raise StoryConflict(
+                    "story advanced outside this reading request; reload to continue"
+                )
+            saved.result = result
+            conn.execute(
+                "UPDATE story_reading_runs SET run_json=? WHERE request_id=?",
+                (saved.model_dump_json(), run.request.request_id),
+            )
+            return result
+
     def load_story_snapshot(self, session_id: str, branch_id: str = "main") -> StorySessionState:
         with self.connect() as conn:
             row = conn.execute(
@@ -172,8 +253,10 @@ class StoryStore(SQLiteStore):
                 conn, session_id, branch_id, turn_number, event_type, payload, now
             )
 
-    def begin_story_turn(self, session_id: str, branch_id: str, turn: int) -> StoryTurnTransaction:
-        return StoryTurnTransaction(self, session_id, branch_id, turn)
+    def begin_story_turn(
+        self, session_id: str, branch_id: str, turn: int, *, expected_version: int | None = None
+    ) -> StoryTurnTransaction:
+        return StoryTurnTransaction(self, session_id, branch_id, turn, expected_version)
 
     def load_story_turn_result(
         self,
@@ -342,11 +425,23 @@ class StoryStore(SQLiteStore):
 
 
 class StoryTurnTransaction:
-    def __init__(self, store: StoryStore, session_id: str, branch_id: str, turn: int):
+    def __init__(
+        self,
+        store: StoryStore,
+        session_id: str,
+        branch_id: str,
+        turn: int,
+        expected_version: int | None = None,
+    ):
         self._store = store
         self.session_id = session_id
         self.branch_id = branch_id
         self.turn = turn
+        self.expected_version = (
+            expected_version
+            if expected_version is not None
+            else store.load_story_snapshot(session_id, branch_id).version
+        )
         self._events: list[tuple[str, dict[str, Any]]] = []
 
     @property
@@ -364,37 +459,73 @@ class StoryTurnTransaction:
     ) -> None:
         now = self._store._now()
         with self._store.connect() as conn:
-            for event_type, payload in self._events:
-                self._store._insert_story_event(
-                    conn,
-                    self.session_id,
-                    self.branch_id,
-                    self.turn,
-                    event_type,
-                    payload,
-                    now,
+            # Acquire the write lock only at commit, never while awaiting an LLM.
+            # The version read and every write below share this transaction.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT state_json FROM story_snapshots WHERE session_id=? AND branch_id=?",
+                (self.session_id, self.branch_id),
+            ).fetchone()
+            previous = StorySessionState.model_validate_json(row[0]) if row else None
+            if (
+                previous is None
+                or previous.version != self.expected_version
+                or previous.turn_number != self.turn - 1
+                or state.session_id != self.session_id
+                or state.branch_id != self.branch_id
+                or state.turn_number != self.turn
+                or state.version != self.expected_version + 1
+                or (
+                    result is not None
+                    and (
+                        result.session_id != self.session_id
+                        or result.branch_id != self.branch_id
+                        or result.turn_number != self.turn
+                    )
                 )
-            conn.execute(
-                "INSERT INTO story_snapshots("
-                "session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(session_id,branch_id) DO UPDATE SET "
-                "state_json=excluded.state_json,updated_at=excluded.updated_at",
-                (state.session_id, state.branch_id, state.model_dump_json(), now),
-            )
-            if request_id is not None and result is not None:
-                conn.execute(
-                    "INSERT INTO story_turn_results("
-                    "request_id,session_id,branch_id,turn_number,result_json,created_at) "
-                    "VALUES(?,?,?,?,?,?)",
-                    (
-                        request_id,
+            ):
+                raise StoryConflict("conflicting story turn commit: stale or inconsistent state")
+            try:
+                for event_type, payload in self._events:
+                    self._store._insert_story_event(
+                        conn,
                         self.session_id,
                         self.branch_id,
                         self.turn,
-                        result.model_dump_json(),
+                        event_type,
+                        payload,
                         now,
-                    ),
+                    )
+                conn.execute(
+                    "INSERT INTO story_snapshots("
+                    "session_id,branch_id,state_json,updated_at) VALUES(?,?,?,?) "
+                    "ON CONFLICT(session_id,branch_id) DO UPDATE SET "
+                    "state_json=excluded.state_json,updated_at=excluded.updated_at",
+                    (state.session_id, state.branch_id, state.model_dump_json(), now),
                 )
+                if request_id is not None and result is not None:
+                    conn.execute(
+                        "INSERT INTO story_turn_results("
+                        "request_id,session_id,branch_id,turn_number,result_json,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            request_id,
+                            self.session_id,
+                            self.branch_id,
+                            self.turn,
+                            result.model_dump_json(),
+                            now,
+                        ),
+                    )
+            except sqlite3.IntegrityError as exc:
+                # connect() rolls the whole transaction back on this error, so
+                # atomicity is preserved; surface a domain conflict instead of
+                # a raw sqlite exception.
+                raise StoryConflict(
+                    "conflicting story turn commit: "
+                    f"session={self.session_id} branch={self.branch_id} "
+                    f"turn={self.turn} request_id={request_id!r}"
+                ) from exc
 
     def abort(self, error: str) -> None:
         self._store.append_story(

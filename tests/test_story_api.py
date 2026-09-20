@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 
+from trpg_runtime.narrative import NarrativeAuthor, NarrativeDraft
 from trpg_runtime.resource_library import ResourceLibrary
 from trpg_runtime.story import write_bundle
 from trpg_runtime.story.bundle import (
@@ -24,6 +25,58 @@ from trpg_runtime.story.bundle import (
     StoryBundle,
 )
 from trpg_runtime.web.app import create_app
+
+
+def test_overlapping_story_requests_return_a_conflict(tmp_path: Path, monkeypatch):
+    from trpg_runtime.web import app as web_app
+
+    _make_bundle(tmp_path)
+
+    async def run():
+        class WaitingAuthor(NarrativeAuthor):
+            def __init__(self):
+                self.calls = 0
+                self.ready = asyncio.Event()
+
+            async def generate(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 2:
+                    self.ready.set()
+                await asyncio.wait_for(self.ready.wait(), timeout=5)
+                return NarrativeDraft(narrative="The courier passes through.")
+
+        author = WaitingAuthor()
+        monkeypatch.setattr(web_app, "_story_author_for", lambda fake: author)
+        async with _make_client(tmp_path) as client:
+            created = await client.post(
+                "/api/story/sessions",
+                json={
+                    "story_id": "web-lantern",
+                    "session_id": "concurrent",
+                    "player_name": "Ari",
+                },
+            )
+            assert created.status_code == 200
+            replies = await asyncio.gather(
+                *[
+                    client.post(
+                        "/api/story/sessions/concurrent/turns",
+                        json={
+                            "choice_id": "trust",
+                            "input_mode": "choice",
+                            "request_id": request_id,
+                        },
+                    )
+                    for request_id in ("first", "second")
+                ]
+            )
+            assert sorted(reply.status_code for reply in replies) == [200, 409]
+            snapshot = (await client.get("/api/story/sessions/concurrent")).json()
+            assert snapshot["turn_number"] == snapshot["version"] == 1
+            events = (await client.get("/api/story/sessions/concurrent/events")).json()["events"]
+            assert sum(event["type"] == "story_turn_completed" for event in events) == 1
+
+    asyncio.run(run())
 
 
 def _make_bundle(tmp_path: Path) -> Path:

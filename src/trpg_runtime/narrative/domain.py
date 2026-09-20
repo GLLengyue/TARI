@@ -58,8 +58,16 @@ class NarrativeInput(BaseModel):
     input_mode: Literal["choice", "freeform", "continue"] = "freeform"
 
 
-class NarrativeAuthorProposal(BaseModel):
+class NarrativeDraft(BaseModel):
+    """Prose-only author output. The runtime supplies all authoritative fields."""
+
     narrative: str
+    debug: dict[str, Any] = Field(default_factory=dict)
+
+
+class NarrativeAuthorProposal(NarrativeDraft):
+    """Legacy author response, accepted only when it matches the resolved turn."""
+
     narrative_beat_id: str
     next_beat_id: str
     advance_beat: bool = True
@@ -68,12 +76,20 @@ class NarrativeAuthorProposal(BaseModel):
     revealed_fact_ids: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     ended: bool = False
-    debug: dict[str, Any] = Field(default_factory=dict)
+
+
+class StoryDecision(BaseModel):
+    turn_number: int
+    beat_id: str
+    choice_id: str
+    text: str
+    consequence_hint: str = ""
 
 
 class StorySessionState(BaseModel):
     session_id: str
     story_id: str
+    bundle_digest: str | None = None
     title: str
     branch_id: str = "main"
     parent_branch_id: str | None = None
@@ -88,6 +104,7 @@ class StorySessionState(BaseModel):
     relationship_values: dict[str, int] = Field(default_factory=dict)
     revealed_fact_ids: set[str] = Field(default_factory=set)
     completed_beat_ids: list[str] = Field(default_factory=list)
+    decisions: list[StoryDecision] = Field(default_factory=list)
     available_choices: list[NarrativeChoice] = Field(default_factory=list)
     last_narrative: str = ""
     status: Literal["active", "completed", "paused"] = "active"
@@ -109,3 +126,41 @@ class NarrativeTurnResult(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     ended: bool = False
     debug: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReadingRequest(BaseModel):
+    request_id: str = Field(min_length=1, max_length=128)
+    max_scenes: int = Field(default=3, ge=1, le=8)
+    choice_id: str | None = None
+
+
+class ReadingScene(BaseModel):
+    turn_number: int
+    narrative_beat_id: str
+    narrative: str
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class ReadingBatch(BaseModel):
+    request_id: str
+    session_id: str
+    branch_id: str
+    stop_reason: Literal["awaiting_choice", "completed", "budget_exhausted"]
+    scenes: list[ReadingScene]
+    current_beat_id: str
+    turn_number: int
+    version: int
+    choices: list[NarrativeChoice] = Field(default_factory=list)
+
+
+class ReadingRun(BaseModel):
+    """Persistent request identity; scene commits are journaled in turn_results."""
+
+    run_id: str
+    request: ReadingRequest
+    session_id: str
+    branch_id: str
+    bundle_digest: str
+    start_turn: int
+    start_version: int
+    result: ReadingBatch | None = None

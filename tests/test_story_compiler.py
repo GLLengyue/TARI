@@ -13,8 +13,11 @@ from trpg_runtime.story import load_bundle
 from trpg_runtime.story.decomposer import (
     SOURCE_PLAN_VERSION,
     SourceStructurePlan,
+    StoryCompilationWorkspace,
+    _deterministic_bounds,
     _materialise_source_document,
     _normalise_source_plan,
+    _prepare_source_document,
 )
 
 
@@ -253,6 +256,8 @@ def test_compile_bundle_writes_auditable_outputs_and_resumes_from_cache(tmp_path
     assert bundle.canon_facts
     assert bundle.relationships
     assert bundle.story_beats
+    assert all(not beat.decision_required for beat in bundle.story_beats if not beat.terminal)
+    assert bundle.opening == bundle.first_beat.narrative
 
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     assert manifest["status"] == "complete"
@@ -684,3 +689,88 @@ def test_compile_pipeline_uses_source_plan_stage(tmp_path):
         world_batch_chapters=2,
     )
     assert cached.manifest_path == result.manifest_path
+
+
+def test_deterministic_bounds_prefers_dominant_heading_level() -> None:
+    lines = [
+        "# 测试书",
+        "",
+        "## 第一章 开头",
+        "正文",
+        "### 小节",
+        "## 第二章 结尾",
+        "正文",
+    ]
+    bounds = _deterministic_bounds(lines)
+    assert [line for line, _ in bounds] == [3, 6]
+    assert bounds[0][1] == "第一章 开头"
+
+
+def test_deterministic_bounds_none_without_unambiguous_headings() -> None:
+    assert _deterministic_bounds(["plain text", "more text"]) is None
+    assert _deterministic_bounds(["# only one heading", "text"]) is None
+
+
+def test_degenerate_source_plan_falls_back_to_heading_split(tmp_path: Path) -> None:
+    import asyncio
+
+    source = tmp_path / "book.md"
+    source.write_text(
+        "# 测试书\n\n"
+        "## 第一章 开头\n\n正文一段。\n\n"
+        "## 第二章 中段\n\n正文二段。\n\n"
+        "## 第三章 结尾\n\n正文三段。\n",
+        encoding="utf-8",
+    )
+    workspace = StoryCompilationWorkspace(tmp_path / "workspace")
+
+    class _CollapsingAuthor:
+        settings = LLMSettings("fake", "", "", "fake")
+
+        async def complete_text(
+            self,
+            messages: list[dict[str, str]],
+            *,
+            temperature: float | None = None,
+            max_tokens: int | None = None,
+        ) -> str:
+            return "占位文本"
+
+        async def complete_json(
+            self,
+            messages: list[dict[str, str]],
+            *,
+            temperature: float | None = None,
+            max_tokens: int | None = None,
+        ) -> dict[str, object]:
+            # The model collapses the whole book into a single "chapter".
+            return {
+                "chapters": [
+                    {
+                        "ordinal": 1,
+                        "title": "整本书",
+                        "start_line": 1,
+                        "end_line": 14,
+                    }
+                ]
+            }
+
+        async def aclose(self) -> None:
+            pass
+
+    document, plan = asyncio.run(
+        _prepare_source_document(
+            source,
+            workspace,
+            author=_CollapsingAuthor(),
+            source_id="book",
+            title=None,
+            locale="zh",
+            rebuild=False,
+        )
+    )
+    assert len(plan.chapters) == 3
+    assert len(document.chapters) == 3
+    assert document.chapters[0].title.startswith("第一章")
+    assert "正文一段。" in document.chapters[0].text
+    assert "正文一段。" not in document.chapters[1].text

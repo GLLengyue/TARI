@@ -1,0 +1,362 @@
+schema_version: 1
+story_id: last-ferry
+title: 最后一班渡船
+locale: zh
+opening: '林岑答应替住院的老师把一封信送到河对岸。收信人明早就要离开这座城。
+
+  傍晚，最后一班渡船还在码头等候，雨却已经淹过了石阶。老师没有催促，
+
+  只说如果来不及，也请给他一个确切的回音。信的封口一直完好。'
+source:
+  kind: handcrafted_adaptation
+  label: TARI 原创阅读样本
+  sha256: 29bdbfda4711d7820652bdd227dabe63ec6e0b92aebdbc2e910dfd04280e44d7
+  source_refs:
+  - ferry:quay
+  - ferry:rain
+  - ferry:decision
+  - ferry:crossing
+  - ferry:shelter
+evidence:
+- ref_id: ferry:quay
+  label: 码头
+  location: examples/story/last_ferry.md#码头
+  excerpt: '林岑答应替住院的老师把一封信送到河对岸。收信人明早就要离开这座城。
+
+    傍晚，最后一班渡船还在码头等候，雨却已经淹过了石阶。老师没有催促，
+
+    只说如果来不及，也请给他一个确切的回音。信的封口一直完好。'
+- ref_id: ferry:rain
+  label: 雨中的钟声
+  location: examples/story/last_ferry.md#雨中的钟声
+  excerpt: '渡船响了第一次铃。船夫周伯告诉林岑，河道快封了，今晚不会再开第二趟。
+
+    这时旧候船室的屋顶漏水，守屋的阿禾正把几个孩子往高处带。
+
+    她推不开储物间的铁门，里面放着木板和干毯子。她喊住林岑，请他搭把手。'
+- ref_id: ferry:decision
+  label: 分歧
+  location: examples/story/last_ferry.md#分歧
+  excerpt: '周伯能再等一分钟。留下帮忙就会错过今晚的船；登船则能在收信人离开之前
+
+    送达信件，但阿禾必须另找帮手。这里没有保证两件事都能办成的捷径。
+
+    林岑既记得老师的托付，也看见孩子们已经湿透的鞋子。'
+- ref_id: ferry:crossing
+  label: 渡河
+  location: examples/story/last_ferry.md#渡河
+  excerpt: '原短篇沿着送信的方向继续：林岑向阿禾说明了托付，登上渡船，请周伯用电台
+
+    联系岸上的值班人。隔着雨，他没能听清回应。船行至河心时，城里的灯逐排熄灭。
+
+    他把信放在衣服最里面。对岸的收信人开门后没有拆信，只认真记下老师的病房号。
+
+    林岑留了回电方式，知道自己兑现了一件承诺，也留下了一件暂时没有答案的事。'
+- ref_id: ferry:shelter
+  label: 另一种可能
+  location: examples/story/last_ferry.md#另一种可能
+  excerpt: '改编分支允许林岑留下：他和阿禾顶开铁门，垫起木板，让孩子们坐到干燥的地方。
+
+    铃声停了，渡船离岸。信没有送到，封口仍然完好。天亮前，林岑借到电话，
+
+    如实告诉老师今晚发生的事，并请求对岸的联系方式。他不能把错过说成已经完成。
+
+    雨稍小时，阿禾替他把潮湿的信封烘干。他们约定等河道重新开放，再一起想办法。'
+entities:
+- entity_id: lin
+  name: 林岑
+  description: 受老师托付送信的人。
+- entity_id: he
+  name: 阿禾
+  description: 在旧候船室照顾孩子的人。
+- entity_id: zhou
+  name: 周伯
+  description: 末班渡船的船夫。
+plot_arcs:
+- arc_id: ferry-night
+  title: 雨夜的托付
+  beat_ids:
+  - quay
+  - rain
+  - decision
+  - shelter
+  - night
+  - shelter-end
+  - boat
+  - crossing
+  - delivered
+  source_refs:
+  - ferry:quay
+  - ferry:rain
+  - ferry:decision
+  - ferry:crossing
+  - ferry:shelter
+story_beats:
+- beat_id: quay
+  arc_id: ferry-night
+  title: 最后一趟船
+  location: 雨夜的渡口
+  dramatic_goal: 最后一趟船
+  narrative: '林岑答应替住院的老师把一封信送到河对岸。收信人明早就要离开这座城。
+
+    傍晚，最后一班渡船还在码头等候，雨却已经淹过了石阶。老师没有催促，
+
+    只说如果来不及，也请给他一个确切的回音。信的封口一直完好。'
+  source_refs:
+  - ferry:quay
+  decision_required: false
+  terminal: false
+  choices:
+  - choice_id: next-rain
+    text: 继续阅读
+    risk: low
+    next_beat_id: rain
+  boundary:
+    entry_facts:
+    - 林岑受托在收信人明早离城前送信。
+    exit_facts:
+    - 林岑到达出发岸渡口，信封完好。
+    forbidden_events:
+    - 登船、渡河或交付信件
+- beat_id: rain
+  arc_id: ferry-night
+  title: 第一次铃响
+  location: 雨夜的渡口
+  dramatic_goal: 第一次铃响
+  narrative: '渡船响了第一次铃。船夫周伯告诉林岑，河道快封了，今晚不会再开第二趟。
+
+    这时旧候船室的屋顶漏水，守屋的阿禾正把几个孩子往高处带。
+
+    她推不开储物间的铁门，里面放着木板和干毯子。她喊住林岑，请他搭把手。'
+  source_refs:
+  - ferry:rain
+  decision_required: false
+  terminal: false
+  choices:
+  - choice_id: next-decision
+    text: 继续阅读
+    risk: low
+    next_beat_id: decision
+  boundary:
+    entry_facts:
+    - 林岑仍在出发岸，尚未登船。
+    - 阿禾还没打开储物间。
+    exit_facts:
+    - 阿禾提出求助，林岑尚未回应去留。
+    - 船仍等在码头；信仍未送达。
+    forbidden_events:
+    - 打开储物间或完成救助
+    - 决定留下或登船
+    - 渡河、到达对岸或送达信件
+- beat_id: decision
+  arc_id: ferry-night
+  title: 一分钟
+  location: 雨夜的渡口
+  dramatic_goal: 一分钟
+  narrative: '周伯能再等一分钟。留下帮忙就会错过今晚的船；登船则能在收信人离开之前
+
+    送达信件，但阿禾必须另找帮手。这里没有保证两件事都能办成的捷径。
+
+    林岑既记得老师的托付，也看见孩子们已经湿透的鞋子。'
+  source_refs:
+  - ferry:decision
+  decision_required: true
+  terminal: false
+  choices:
+  - choice_id: stay
+    text: 留下帮阿禾安顿孩子，接受今晚无法送达信件。
+    next_beat_id: shelter
+    narrative_hint: 留下救急，信件保持未送达；之后如实向老师说明。
+    effects:
+    - operation: set
+      path: variables.priority
+      value: shelter
+    - operation: set
+      path: variables.letter_delivered
+      value: false
+  - choice_id: cross
+    text: 赶上渡船送信，请船夫联系岸上的人帮忙。
+    next_beat_id: boat
+    narrative_hint: 兑现送信的承诺，但岸上的救援结果尚不确定。
+    effects:
+    - operation: set
+      path: variables.priority
+      value: letter
+  boundary:
+    entry_facts:
+    - 阿禾正在求助，储物间仍未打开。
+    - 周伯和船仍在出发岸，林岑尚未登船。
+    exit_facts:
+    - 周伯表示只能再等一分钟。
+    - 林岑理解留下就赶不上船，但仍未决定去留。
+    forbidden_events:
+    - 替玩家决定登船或留下
+    - 完成开门或救助
+    - 船离岸、渡河、抵达对岸或送信
+- beat_id: shelter
+  arc_id: ferry-night
+  title: 门后的木板
+  location: 雨夜的渡口
+  dramatic_goal: 门后的木板
+  narrative: 林岑留下，与阿禾顶开候船室的储物间，把木板架过积水。写出两人的协作、雨中的声音和孩子们逐渐安静的过程。林岑错过渡船，不能宣布信已送达。
+  source_refs:
+  - ferry:shelter
+  decision_required: false
+  terminal: false
+  choices:
+  - choice_id: next-night
+    text: 继续阅读
+    risk: low
+    next_beat_id: night
+  boundary:
+    entry_facts:
+    - 林岑刚决定留下帮忙。
+    - 储物间还没打开。
+    - 船仍在出发前的最后一分钟。
+    exit_facts:
+    - 林岑与阿禾打开储物间、架起木板，让孩子坐到干燥处。
+    - 船已经离开，信仍在林岑身上，未送达。
+    forbidden_events:
+    - 林岑登船或到达对岸
+    - 信件送达
+    - 联系老师或宣布延期没有代价
+- beat_id: night
+  arc_id: ferry-night
+  title: 铃声停了
+  location: 雨夜的渡口
+  dramatic_goal: 铃声停了
+  narrative: 渡船已经离开。孩子们坐在干毯子上，阿禾递来一杯温水。林岑整理潮湿的信封，面对尚未兑现的托付，并设法借电话。此时关系的变化来自共同处理困难，不强行制造新的危机。
+  source_refs:
+  - ferry:shelter
+  decision_required: false
+  terminal: false
+  choices:
+  - choice_id: next-shelter-end
+    text: 继续阅读
+    risk: low
+    next_beat_id: shelter-end
+  boundary:
+    entry_facts:
+    - 孩子已安顿好，林岑留在出发岸。
+    - 船已离开，信件仍未送达。
+    exit_facts:
+    - 林岑与阿禾短暂休息，找到可以联系老师的电话。
+    - 还没接通老师；仍需面对收信人明早离城的期限。
+    forbidden_events:
+    - 重复打开已经打开的储物间或重新完成架板
+    - 已经打通老师电话
+    - 老师宣布不急或明天送也行
+    - 渡河或完成送信
+- beat_id: shelter-end
+  arc_id: ferry-night
+  title: 一个确切的回音
+  location: 雨夜的渡口
+  dramatic_goal: 一个确切的回音
+  narrative: 天亮前，林岑联系上老师，如实说明没有送达信件，请求新的联系方式。阿禾替他烘干信封，两人约定河道开放后再想办法。以承认代价、保留希望的画面结束；不要把未完成的送信写成成功。
+  source_refs:
+  - ferry:shelter
+  decision_required: false
+  terminal: true
+  choices: []
+  boundary:
+    entry_facts:
+    - 林岑还在出发岸，信件未送达。
+    - 电话可用，但尚未向老师回报。
+    exit_facts:
+    - 林岑如实说明没送达，请求新的联系办法，老师没有保证能延期。
+    - 阿禾协助烘干信封，两人约定河道开放后再想办法。
+    - 信仍未送达，承诺仍未完成，救助确实完成。
+    forbidden_events:
+    - 信已交给收信人
+    - 老师说不急或承诺明天一定来得及
+    - 重复夜间场景段落
+    - 重新倒回漫长雨夜而不结束
+- beat_id: boat
+  arc_id: ferry-night
+  title: 离岸
+  location: 雨夜的渡口
+  dramatic_goal: 离岸
+  narrative: 林岑向阿禾说明老师的托付，登船后请周伯用电台联系岸上值班人。雨声盖住回应，救援尚未得到确认。写出离岸后的犹疑与维持承诺的决心。
+  source_refs:
+  - ferry:crossing
+  decision_required: false
+  terminal: false
+  choices:
+  - choice_id: next-crossing
+    text: 继续阅读
+    risk: low
+    next_beat_id: crossing
+  boundary:
+    entry_facts:
+    - 林岑刚决定渡河送信。
+    - 船还在出发岸，信件尚未送达。
+    exit_facts:
+    - 林岑登船并请周伯联系岸上帮手；没有收到救援确认。
+    - 船刚离开出发岸，尚未到达对岸，信仍在林岑身上。
+    forbidden_events:
+    - 抵达对岸或收信人家
+    - 送达信件
+    - 阿禾和孩子已经获救的确定消息
+    - 步行返回阿禾所在的出发岸
+- beat_id: crossing
+  arc_id: ferry-night
+  title: 河心的灯
+  location: 河对岸
+  dramatic_goal: 河心的灯
+  narrative: 船行到河心，城里的灯逐排熄灭。林岑把未拆封的信护在衣内。周伯谈起天气与航道，避免替阿禾的处境编造确定答案。渡船最终靠上对岸。
+  source_refs:
+  - ferry:crossing
+  decision_required: false
+  terminal: false
+  choices:
+  - choice_id: next-delivered
+    text: 继续阅读
+    risk: low
+    next_beat_id: delivered
+    effects:
+    - operation: set
+      path: variables.letter_delivered
+      value: true
+  boundary:
+    entry_facts:
+    - 渡船已经离岸，林岑和未拆的信都在船上。
+    exit_facts:
+    - 船行经河心，城里灯光熄灭，最后刚靠上对岸。
+    - 林岑还没前往收信人家，信尚未送达。
+    forbidden_events:
+    - 收信人接信或门已打开
+    - 信已经不在身上
+    - 没有渡河就回到阿禾身边
+    - 确认岸上救援成功
+- beat_id: delivered
+  arc_id: ferry-night
+  title: 病房号
+  location: 河对岸
+  dramatic_goal: 病房号
+  narrative: 收信人打开门，接过完好的信，没有立刻拆开，而是认真记下老师的病房号。林岑留下回电方式。送信已完成，岸上的救援结果仍未确认。以两件事不同的确定程度收束故事。
+  source_refs:
+  - ferry:crossing
+  decision_required: false
+  terminal: true
+  choices: []
+  boundary:
+    entry_facts:
+    - 林岑刚到对岸，信仍在身上。
+    - 本场景获准完成交信，原著托付的截止时间仍重要。
+    exit_facts:
+    - 林岑找到收信人并亲手交付信件。
+    - 收信人没有立刻拆信，记下老师的病房号；林岑留下回电方式。
+    - 送信完成；出发岸的救援结果仍未确认。
+    forbidden_events:
+    - 步行跨过河回到阿禾身边
+    - 同时完成亲自留岸救助
+    - 重复河心场景而不交付信件
+style_profile:
+  language: zh
+  point_of_view: third_person_limited
+  tone: 克制、温暖，允许遗憾
+  constraints:
+  - 以林岑为视角，保留具体动作与感官细节。
+  - 不要强迫玩家每段作决定。
+  - 尊重已选分支的代价，不让两种结果同时发生。
+  - 不要提前揭示后续场景。

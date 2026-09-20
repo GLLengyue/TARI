@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from collections import Counter
 from collections.abc import Callable, Mapping
 from typing import Any
 from uuid import uuid4
@@ -15,9 +17,11 @@ from .domain import (
     NarrativeInput,
     NarrativeTurnResult,
     PlayerIdentity,
+    StoryDecision,
     StorySessionState,
 )
-from .storage import StoryStore
+from .storage import StoryConflict, StoryStore
+from .transitions import resolve_transition
 
 _ALLOWED_PATCH_ROOTS = ("variables", "relationship_values")
 
@@ -100,6 +104,7 @@ class NarrativeOrchestrator:
         state = StorySessionState(
             session_id=session_id,
             story_id=self.bundle.story_id,
+            bundle_digest=self.bundle.content_digest,
             title=self.bundle.title,
             seed=seed,
             locale=self.bundle.locale,
@@ -130,6 +135,13 @@ class NarrativeOrchestrator:
             if cached is not None:
                 return self.store.load_story_snapshot(cached.session_id, cached.branch_id), cached
 
+        persisted = self.store.load_story_snapshot(state.session_id, state.branch_id)
+        if persisted != state:
+            raise StoryConflict("conflicting story turn commit: stale state; reload before writing")
+        if state.story_id != self.bundle.story_id or (
+            state.bundle_digest is not None and state.bundle_digest != self.bundle.content_digest
+        ):
+            raise StoryConflict("story bundle changed; restore the session's original bundle")
         if state.status != "active":
             raise RuleViolation("story session is not active")
         if isinstance(player_input, str):
@@ -142,7 +154,9 @@ class NarrativeOrchestrator:
             raise TypeError("story input must be a string, mapping, or NarrativeInput")
         current = self.bundle.beat(state.current_beat_id)
         turn = state.turn_number + 1
-        tx = self.store.begin_story_turn(state.session_id, state.branch_id, turn)
+        tx = self.store.begin_story_turn(
+            state.session_id, state.branch_id, turn, expected_version=state.version
+        )
         try:
             selected_choice = self._resolve_choice(state, current, incoming)
             text = incoming.text.strip()
@@ -158,11 +172,22 @@ class NarrativeOrchestrator:
                     "text": text,
                     "input_mode": incoming.input_mode,
                     "choice_id": incoming.choice_id,
+                    "automatic": selected_choice is not None and not current.decision_required,
                 },
             )
-            recent = self.store.story_events(state.session_id, state.branch_id)[-12:]
+            proposal = resolve_transition(self.bundle, current, text, selected_choice)
+            # Validate deterministic effects before spending a provider call.
+            new_state = _apply_state_patches(state, proposal.state_patches)
+            for fact_id in proposal.revealed_fact_ids:
+                if self.bundle.fact(fact_id).visibility == FactVisibility.AUTHOR_ONLY:
+                    raise RuleViolation(f"author-only fact cannot be revealed: {fact_id}")
+            recent = [
+                event
+                for event in self.store.story_events(state.session_id, state.branch_id)
+                if event["type"] in {"story_narrative_emitted", "story_player_input_received"}
+            ][-12:]
             self._progress("authoring", turn=turn)
-            proposal = await self.author.generate(
+            draft = await self.author.generate(
                 self.bundle,
                 state,
                 current,
@@ -170,9 +195,14 @@ class NarrativeOrchestrator:
                 selected_choice,
                 recent,
             )
-            self._validate_proposal(state, current, selected_choice, proposal)
-            new_state = _apply_state_patches(state, proposal.state_patches)
-            new_state = self._commit_proposal(new_state, current, proposal, turn)
+            if not draft.narrative.strip():
+                raise RuleViolation("narrative author returned empty prose")
+            if isinstance(draft, NarrativeAuthorProposal):
+                self._validate_proposal(state, current, selected_choice, draft)
+                self._validate_legacy_transition(draft, proposal)
+            proposal.narrative = draft.narrative
+            proposal.debug = draft.debug
+            new_state = self._commit_proposal(new_state, current, proposal, turn, selected_choice)
             tx.append("story_author_proposal_accepted", proposal.model_dump(mode="json"))
             tx.append(
                 "story_narrative_emitted",
@@ -190,6 +220,7 @@ class NarrativeOrchestrator:
                     "revealed_fact_ids": sorted(new_state.revealed_fact_ids),
                     "patches": [patch.model_dump(mode="json") for patch in proposal.state_patches],
                     "version": new_state.version,
+                    "decisions": [decision.model_dump() for decision in new_state.decisions],
                 },
             )
             tx.append(
@@ -226,6 +257,26 @@ class NarrativeOrchestrator:
     def fork(self, state: StorySessionState, branch_id: str) -> StorySessionState:
         """Create a child timeline without mutating the parent snapshot."""
         return self.store.create_story_branch(state, branch_id)
+
+    @staticmethod
+    def _validate_legacy_transition(
+        authored: NarrativeAuthorProposal, resolved: NarrativeAuthorProposal
+    ) -> None:
+        excluded = {"narrative", "debug", "state_patches"}
+        if authored.model_dump(exclude=excluded) != resolved.model_dump(exclude=excluded):
+            raise RuleViolation("author metadata must match the runtime-resolved transition")
+
+        def effects(proposal: NarrativeAuthorProposal) -> Counter[str]:
+            return Counter(
+                json.dumps(
+                    {"operation": patch.operation, "path": patch.path, "value": patch.new_value},
+                    sort_keys=True,
+                )
+                for patch in proposal.state_patches
+            )
+
+        if effects(authored) != effects(resolved):
+            raise RuleViolation("author effects must match the runtime-resolved transition exactly")
 
     def _resolve_choice(
         self, state: StorySessionState, current: StoryBeat, incoming: NarrativeInput
@@ -311,12 +362,24 @@ class NarrativeOrchestrator:
         current: StoryBeat,
         proposal: NarrativeAuthorProposal,
         turn: int,
+        selected_choice: BeatChoice | None,
     ) -> StorySessionState:
         completed = list(state.completed_beat_ids)
         if proposal.advance_beat and current.beat_id not in completed:
             completed.append(current.beat_id)
         revealed = set(state.revealed_fact_ids)
         revealed.update(proposal.revealed_fact_ids)
+        decisions = list(state.decisions)
+        if selected_choice is not None and current.decision_required:
+            decisions.append(
+                StoryDecision(
+                    turn_number=turn,
+                    beat_id=current.beat_id,
+                    choice_id=selected_choice.choice_id,
+                    text=selected_choice.text,
+                    consequence_hint=selected_choice.narrative_hint,
+                )
+            )
         return state.model_copy(
             update={
                 "turn_number": turn,
@@ -325,6 +388,7 @@ class NarrativeOrchestrator:
                 "available_choices": proposal.choices,
                 "revealed_fact_ids": revealed,
                 "last_narrative": proposal.narrative,
+                "decisions": decisions,
                 "status": "completed" if proposal.ended else "active",
             }
         )

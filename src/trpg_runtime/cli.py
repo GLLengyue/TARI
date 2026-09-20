@@ -33,6 +33,8 @@ from .narrative import (
     NarrativeOrchestrator,
     OpenAINarrativeAuthor,
     PlayerIdentity,
+    ReadingRequest,
+    StoryReader,
     StorySessionState,
     StoryStore,
 )
@@ -546,6 +548,46 @@ def story_play(
             _print_story_choices(state)
     finally:
         asyncio.run(runtime.author.aclose())
+
+
+@app.command("story-read")
+def story_read(
+    bundle: str,
+    session_id: str,
+    branch_id: str = "main",
+    scenes: int = typer.Option(3, min=1, max=8, help="Maximum new scenes in this reading request."),
+    choice: str | None = typer.Option(None, help="Your choice at the current decision point."),
+    request_id: str | None = typer.Option(None, help="Reuse the same ID to resume or replay."),
+    author: str = typer.Option("fake", help="Writer: fake (offline) or llm."),
+):
+    """Read consecutive scenes, stopping at a decision, the end, or the scene budget."""
+    request = ReadingRequest(
+        request_id=request_id or str(uuid.uuid4()), max_scenes=scenes, choice_id=choice
+    )
+    runtime = NarrativeOrchestrator(story_store(), load_bundle(bundle), _story_author(author))
+    console.print(f"Reading request: {request.request_id} (reuse this ID to resume)")
+
+    async def run():
+        try:
+            return await StoryReader(runtime).read(session_id, request, branch_id)
+        finally:
+            await runtime.author.aclose()
+
+    try:
+        result = asyncio.run(run())
+    except Exception as exc:
+        console.print(f"[red]Reading stopped: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    for scene in result.scenes:
+        console.print(Panel(scene.narrative, title=f"Scene {scene.turn_number}"))
+    messages = {
+        "completed": "Story completed.",
+        "budget_exhausted": "Reading limit reached. Start a new request to continue.",
+        "awaiting_choice": "Your direction is needed. Start a new request with --choice ID.",
+    }
+    console.print(messages[result.stop_reason])
+    for item in result.choices:
+        console.print(f"  {item.choice_id}: {item.text}")
 
 
 @app.command("story-branch")

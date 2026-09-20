@@ -27,8 +27,12 @@ from ..narrative import (
     NarrativeOrchestrator,
     OpenAINarrativeAuthor,
     PlayerIdentity,
+    ReadingRequest,
+    StoryReader,
     StoryStore,
 )
+from ..narrative.providers import SceneReviewRejected
+from ..narrative.storage import StoryConflict
 from ..resource_library import ResourceLibrary
 from ..runtime import TurnOrchestrator
 from ..storage import EventStore
@@ -71,6 +75,10 @@ class StoryTurnRequest(BaseModel):
     choice_id: str | None = None
     input_mode: str = "freeform"
     request_id: str | None = None
+    fake: bool = True
+
+
+class StoryReadRequest(ReadingRequest):
     fake: bool = True
 
 
@@ -430,12 +438,18 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    def _story_bundle_for_state(req: Request, state):
+        lib: ResourceLibrary = req.app.state.library
+        resource = _resolve_story_resource(req, state.story_id)
+        return lib.load_story_bundle(resource)
+
     def _serialize_story_state(state) -> dict[str, Any]:
         choices = [choice.model_dump(mode="json") for choice in state.available_choices]
         revealed = sorted(state.revealed_fact_ids)
         return {
             "session_id": state.session_id,
             "story_id": state.story_id,
+            "bundle_digest": state.bundle_digest,
             "title": state.title,
             "branch_id": state.branch_id,
             "parent_branch_id": state.parent_branch_id,
@@ -448,6 +462,7 @@ def create_app(
             "player": state.player_identity.model_dump(mode="json"),
             "available_choices": choices,
             "completed_beat_ids": list(state.completed_beat_ids),
+            "decisions": [decision.model_dump() for decision in state.decisions],
             "revealed_fact_ids": revealed,
             "variables": state.variables,
             "relationship_values": state.relationship_values,
@@ -536,14 +551,7 @@ def create_app(
             state = store.load_story_snapshot(session_id, branch_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        lib: ResourceLibrary = request.app.state.library
-        bundle = None
-        for res in lib.by_kind("stories"):
-            if res.meta.get("story_id") == state.story_id:
-                bundle = lib.load_story_bundle(res)
-                break
-        if bundle is None:
-            raise HTTPException(status_code=404, detail=f"unknown story: {state.story_id}")
+        bundle = _story_bundle_for_state(request, state)
 
         try:
             incoming = NarrativeInput(
@@ -561,6 +569,13 @@ def create_app(
             new_state, result = await runtime.process_turn(
                 state, incoming, request_id=body.request_id
             )
+        except StoryConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SceneReviewRejected as exc:
+            raise HTTPException(status_code=502, detail={
+                "code": "scene_review_rejected",
+                "message": "Draft failed continuity review; published scenes are unchanged.",
+            }) from exc
         except Exception as exc:  # noqa: BLE001 - surface validation errors
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
@@ -580,6 +595,35 @@ def create_app(
                 "ended": result.ended,
             },
         }
+
+    @app.post("/api/story/sessions/{session_id}/read")
+    async def story_session_read(
+        session_id: str, body: StoryReadRequest, request: Request, branch_id: str = "main"
+    ) -> dict[str, Any]:
+        state = _story_session_state_from_request(request, session_id, branch_id)
+        bundle = _story_bundle_for_state(request, state)
+        author = _story_author_for(body.fake)
+        runtime = NarrativeOrchestrator(_story_store(request.app.state.store.path), bundle, author)
+        try:
+            result = await StoryReader(runtime).read(
+                session_id,
+                ReadingRequest(
+                    request_id=body.request_id, max_scenes=body.max_scenes, choice_id=body.choice_id
+                ),
+                branch_id,
+            )
+        except StoryConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SceneReviewRejected as exc:
+            raise HTTPException(status_code=502, detail={
+                "code": "scene_review_rejected",
+                "message": "Draft failed continuity review; resume with the same request_id.",
+            }) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await author.aclose()
+        return result.model_dump(mode="json")
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

@@ -232,6 +232,7 @@ def scaffold_bundle(
                 narrative=chapter.text,
                 source_refs=[chapter.source_ref],
                 choices=choices,
+                decision_required=False,
                 terminal=is_terminal,
             )
         )

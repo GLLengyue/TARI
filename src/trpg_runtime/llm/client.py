@@ -24,6 +24,7 @@ class LLMSettings:
     timeout: float = 90.0
     temperature: float = 0.4
     max_tokens: int = 1200
+    thinking_level: str = "off"
 
     @property
     def chat_url(self) -> str:
@@ -32,6 +33,13 @@ class LLMSettings:
     @property
     def is_configured(self) -> bool:
         return bool(self.base_url and self.model)
+
+    def _chat_template_kwargs(self) -> dict[str, Any] | None:
+        if self.thinking_level != "off":
+            return {"enable_thinking": True, "thinking_level": self.thinking_level}
+        if _is_local_endpoint(self.base_url):
+            return {"enable_thinking": False}
+        return None
 
 
 def _clean(value: str | None) -> str:
@@ -141,6 +149,9 @@ def resolve_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
         max_tokens = int(_clean(values.get("TARI_LLM_MAX_TOKENS")) or "1200")
     except ValueError:
         max_tokens = 1200
+    thinking_level = _clean(values.get("TARI_LLM_THINKING_LEVEL")).lower() or "off"
+    if thinking_level not in {"off", "low", "medium", "high"}:
+        thinking_level = "off"
     return LLMSettings(
         provider=provider,
         base_url=base_url,
@@ -149,6 +160,7 @@ def resolve_llm_settings(env: Mapping[str, str] | None = None) -> LLMSettings:
         timeout=timeout,
         temperature=temperature,
         max_tokens=max_tokens,
+        thinking_level=thinking_level,
     )
 
 
@@ -231,8 +243,9 @@ class OpenAICompatibleClient:
         }
         if json_mode:
             body["response_format"] = {"type": "json_object"}
-        if _is_local_endpoint(self.settings.base_url):
-            body["chat_template_kwargs"] = {"enable_thinking": False}
+        chat_template_kwargs = self.settings._chat_template_kwargs()
+        if chat_template_kwargs is not None:
+            body["chat_template_kwargs"] = chat_template_kwargs
         if self._client is not None:
             response = await self._client.post("chat/completions", json=body)
             response.raise_for_status()
@@ -263,6 +276,14 @@ class OpenAICompatibleClient:
             return "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
         return str(content)
 
+    @staticmethod
+    def finish_reason(payload: dict[str, Any]) -> str:
+        """Return the provider's stop reason, or "" when it is unavailable."""
+        try:
+            return str(payload["choices"][0].get("finish_reason") or "")
+        except (KeyError, IndexError, TypeError):
+            return ""
+
     async def complete_text(
         self,
         messages: list[dict[str, str]],
@@ -290,7 +311,20 @@ class OpenAICompatibleClient:
             max_tokens=max_tokens,
             json_mode=True,
         )
-        return extract_json_object(self.message_content(payload))
+        text = self.message_content(payload)
+        reason = self.finish_reason(payload)
+        if reason == "length":
+            raise ValueError(
+                "model output was truncated by max_tokens (finish_reason=length);"
+                " raise the token budget or lower --chapter-chars"
+                " | raw=" + repr(text[:400])
+            )
+        try:
+            return extract_json_object(text)
+        except ValueError as exc:
+            # Carry the raw output: callers may log it, and a bare parse error
+            # cannot distinguish a malformed response from an empty one.
+            raise ValueError(f"{exc} | finish_reason={reason or '?'} | raw={text[:400]!r}") from exc
 
 
 __all__ = [

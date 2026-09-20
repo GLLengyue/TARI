@@ -248,6 +248,11 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _log(message: str) -> None:
+    """Emit a timestamped progress line so long compiles stay observable."""
+    print(f"[{_now()}] {message}", flush=True)
+
+
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -821,6 +826,58 @@ def _source_structure_candidates(lines: Sequence[str], limit: int = 320) -> list
     return sorted([*priority, *remainder[:budget]], key=lambda item: int(item["line"]))
 
 
+def _deterministic_bounds(lines: Sequence[str]) -> list[tuple[int, str]] | None:
+    """Markdown heading split: the most frequent heading level wins.
+
+    Returns (line_number, title) pairs for chapter headings, or None when the
+    file has no unambiguous heading structure. Used as a deterministic
+    fallback when the LLM source plan is degenerate (for example one chapter
+    covering the whole book), which the model tends to do on long sources.
+    """
+    levels: dict[int, list[tuple[int, str]]] = {}
+    for number, raw_line in enumerate(lines, start=1):
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", raw_line.strip())
+        if not match:
+            continue
+        level = len(match.group(1))
+        levels.setdefault(level, []).append((number, match.group(2).strip()))
+    if not levels:
+        return None
+    dominant = max(levels, key=lambda level: len(levels[level]))
+    if len(levels[dominant]) < 2:
+        return None
+    return levels[dominant]
+
+
+def _plan_from_headings(
+    source_sha256: str,
+    lines: Sequence[str],
+    headings: list[tuple[int, str]],
+) -> SourceStructurePlan:
+    total_lines = len(lines)
+    chapters: list[SourcePlanChapter] = []
+    for index, (start_line, title) in enumerate(headings, start=1):
+        end_line = (
+            headings[index][0] - 1 if index < len(headings) else total_lines
+        )
+        chapters.append(
+            SourcePlanChapter(
+                ordinal=index,
+                title=title,
+                start_line=start_line,
+                end_line=end_line,
+                reason="deterministic markdown heading split",
+            )
+        )
+    return SourceStructurePlan(
+        source_sha256=source_sha256,
+        total_lines=total_lines,
+        content_start_line=headings[0][0],
+        content_end_line=total_lines,
+        chapters=chapters,
+    )
+
+
 def _source_plan_prompt(
     title: str,
     source_sha256: str,
@@ -1041,9 +1098,16 @@ async def _prepare_source_document(
                     candidates,
                 ),
                 "源文档结构规划",
-                6000,
+                16000,
             )
             plan = _normalise_source_plan(payload, source_sha256, len(lines))
+            headings = _deterministic_bounds(lines)
+            if headings is not None and len(headings) > max(2, 2 * len(plan.chapters)):
+                _log(
+                    f"source plan degenerate ({len(plan.chapters)} chapter(s) for "
+                    f"{len(headings)} detected headings); using deterministic heading split"
+                )
+                plan = _plan_from_headings(source_sha256, lines, headings)
             workspace.write_json(workspace.source_plan_path, plan.model_dump(mode="json"))
         except Exception as exc:
             manifest = workspace.load_manifest()
@@ -1219,23 +1283,40 @@ async def _extract_cards(
         else:
             cards[chapter.ordinal] = cached
 
+    _log(
+        f"chapter cards: {len(chapters) - len(pending)} cached, {len(pending)} to generate "
+        f"(parallelism {parallelism})"
+    )
+
     semaphore = asyncio.Semaphore(max(1, parallelism))
 
     async def run(chapter: SourceChapter) -> ChapterCard:
         async with semaphore:
+            _log(
+                f"generating chapter {chapter.ordinal} card:"
+                f" \"{chapter.title}\" ({chapter.ordinal}/{target})"
+            )
             return await _extract_one_card(document, chapter, author, chapter_chars)
 
-    results = await asyncio.gather(*(run(chapter) for chapter in pending), return_exceptions=True)
+    # Tasks start immediately under the semaphore; awaiting each future in turn
+    # preserves the previous gather semantics while logging per-chapter progress.
     errors: list[str] = []
-    for chapter, result in zip(pending, results, strict=True):
-        if isinstance(result, BaseException):
-            errors.append("第" + str(chapter.ordinal) + "章：" + str(result))
+    generated = 0
+    futures = [asyncio.ensure_future(run(chapter)) for chapter in pending]
+    for future, chapter in zip(futures, pending, strict=True):
+        try:
+            card = await future
+        except BaseException as exc:
+            errors.append("第" + str(chapter.ordinal) + "章：" + str(exc))
+            _log(f"chapter {chapter.ordinal} card failed: {exc}")
             continue
-        cards[chapter.ordinal] = result
+        cards[chapter.ordinal] = card
+        generated += 1
         path = workspace.chapter_cards_dir / ("chapter_" + str(chapter.ordinal).zfill(4) + ".json")
-        workspace.write_json(path, result.model_dump(mode="json"))
+        workspace.write_json(path, card.model_dump(mode="json"))
         manifest.setdefault("stages", {})["chapter_cards_completed"] = len(cards)
         workspace.save_manifest(manifest)
+        _log(f"chapter {chapter.ordinal} card done ({generated}/{len(pending)} this batch)")
     if errors:
         raise RuntimeError("章节事实卡存在失败，可直接重试续跑：\n" + "\n".join(errors[:8]))
     return [cards[index] for index in sorted(cards)]
@@ -1385,6 +1466,10 @@ async def _extract_arcs(
         cursor = 0
         carryover = []
     next_index = len(records) + 1
+    _log(
+        f"story arcs: {len(records)} already generated, "
+        f"{len(cards) - cursor} chapters remaining to process"
+    )
 
     while cursor < len(cards) or carryover:
         new_cards = list(cards[cursor : cursor + window_chapters])
@@ -1396,6 +1481,7 @@ async def _extract_arcs(
         if not window:
             break
         is_final = cursor >= len(cards)
+        _log(f"story arc window: processing chapters {window[0].chapter}-{window[-1].chapter}")
         payload = await _complete_json(
             author,
             _arc_prompt(
@@ -1445,6 +1531,10 @@ async def _extract_arcs(
         manifest.setdefault("stages", {})["story_arcs_completed_through"] = records[-1].end_chapter
         manifest.setdefault("stages", {})["story_arcs"] = True
         workspace.save_manifest(manifest)
+        _log(
+            f"story arcs: {len(records)} arcs in total; next window starts at "
+            f"chapter {cursor if carryover else 'end'}"
+        )
     return records
 
 
@@ -1480,7 +1570,15 @@ async def _extract_world(
             world_cards[index] = str(cached["content"])
             manifest.setdefault("stages", {})["world_cards_completed"] = index
             workspace.save_manifest(manifest)
+            _log(
+                f"world card {index}/{len(batches)}: cached"
+                f" (chapters {batch[0].chapter}-{batch[-1].chapter})"
+            )
             continue
+        _log(
+            f"world card {index}/{len(batches)}: generating"
+            f" (chapters {batch[0].chapter}-{batch[-1].chapter})"
+        )
         try:
             content = await _complete_text(
                 author,
@@ -1508,6 +1606,7 @@ async def _extract_world(
             manifest.setdefault("stages", {})["world_cards_completed"] = index
             manifest.setdefault("failures", {}).pop("world_cards", None)
             workspace.save_manifest(manifest)
+            _log(f"world card {index}/{len(batches)}: done")
         except Exception as exc:  # noqa: BLE001 - preserve batch checkpoint and retry later
             manifest.setdefault("failures", {})["world_cards"] = {
                 "batch": index,
@@ -1537,7 +1636,9 @@ async def _extract_world(
             previous = str(cached["content"])
             manifest.setdefault("stages", {})["world_merge_completed"] = index
             workspace.save_manifest(manifest)
+            _log(f"world merge {index}: cached")
             continue
+        _log(f"world merge {index}: merging previous document with card {index}")
         merge_messages = _world_merge_prompt(
             previous,
             world_cards[index],
@@ -1580,6 +1681,7 @@ async def _extract_world(
         manifest.setdefault("stages", {})["world_merge_completed"] = index
         manifest.setdefault("failures", {}).pop("world_merge", None)
         workspace.save_manifest(manifest)
+        _log(f"world merge {index}: done")
 
     workspace.write_text(workspace.world_dir / "world_knowledge.md", previous)
     for index, pair in enumerate(_split_world(previous).items(), start=1):
@@ -1604,6 +1706,7 @@ async def _build_structures(
     for arc in arcs:
         bucket = (arc.start_chapter - 1) // volume_size
         groups.setdefault(bucket, []).append(arc)
+    _log(f"structures: {len(groups)} volume outline(s) of {volume_size} chapters each")
     outlines: list[str] = []
     for index, bucket in enumerate(sorted(groups), start=1):
         group = groups[bucket]
@@ -1619,6 +1722,7 @@ async def _build_structures(
         ):
             outline = str(cached.get("outline") or "")
         else:
+            _log(f"volume outline {index}/{len(groups)}: generating (chapters {start}-{end})")
             outline = await _complete_text(
                 author,
                 _structure_prompt(document.title, start, end, group),
@@ -1644,6 +1748,7 @@ async def _build_structures(
         )
         manifest.setdefault("stages", {})["volume_structures_completed"] = index
         workspace.save_manifest(manifest)
+        _log(f"volume outline {index}/{len(groups)}: done")
 
     arcs_digest = _sha256_text(_json_text([arc.model_dump(mode="json") for arc in arcs]))
     novel_path = workspace.structures_dir / "novel_outline.json"
@@ -1654,7 +1759,9 @@ async def _build_structures(
         and cached_novel.get("arcs_digest") == arcs_digest
     ):
         novel_outline = str(cached_novel.get("outline") or "")
+        _log("novel outline: cached")
     else:
+        _log("novel outline: generating full-book outline")
         novel_outline = await _complete_text(
             author,
             _novel_prompt(document.title, outlines),
@@ -1851,6 +1958,7 @@ def _build_bundle(
                 narrative=_render_arc(arc),
                 source_refs=arc.source_refs,
                 choices=choices,
+                decision_required=False,
                 terminal=not bool(next_id),
             )
         )
@@ -1891,7 +1999,8 @@ def _build_bundle(
         story_id=_slug(story_id or document.source_id),
         title=title or document.title,
         locale=document.locale,
-        opening=novel_outline or beats[0].narrative,
+        # The full outline is audit/planning material, not the reader's opening.
+        opening=beats[0].narrative,
         source=SourceManifest(
             kind=document.kind,
             label=document.title,
@@ -2065,6 +2174,23 @@ async def compile_document(
     workspace.write_json(workspace.source_path, document.model_dump(mode="json"))
     workspace.save_manifest(manifest)
 
+    _log(
+        f"compile start: \"{title or document.title}\" total {len(document.chapters)} chapters / "
+        f"target {target} chapters, model={author.settings.model}, workspace={workspace.root}"
+    )
+    stage_flags = manifest.get("stages") or {}
+    stage_names = (
+        "chapter_cards",
+        "story_arcs",
+        "world_knowledge",
+        "structures",
+        "novel_outline",
+    )
+    done_stages = [name for name in stage_names if stage_flags.get(name)]
+    if done_stages:
+        _log("resume mode: already completed " + ", ".join(done_stages))
+    _log("stage 1/5 chapter cards")
+
     cards = await _extract_cards(
         document, workspace, author, target, parallelism, chapter_chars, manifest
     )
@@ -2073,24 +2199,28 @@ async def compile_document(
     manifest.setdefault("stages", {})["chapter_cards"] = True
     workspace.save_manifest(manifest)
 
+    _log("stage 2/5 story arcs")
     arcs = await _extract_arcs(
         workspace, cards, author, window_chapters, max_arc_chapters, manifest
     )
     manifest.setdefault("stages", {})["story_arcs"] = True
     workspace.save_manifest(manifest)
 
+    _log("stage 3/5 world knowledge")
     world_document = await _extract_world(
         workspace, cards, author, world_batch_chapters, parallelism, manifest
     )
     manifest.setdefault("stages", {})["world_knowledge"] = True
     workspace.save_manifest(manifest)
 
+    _log("stage 4/5 structures and outline")
     _, novel_outline = await _build_structures(
         workspace, document, arcs, author, volume_size, manifest
     )
     manifest.setdefault("stages", {}).update({"structures": True, "novel_outline": True})
     workspace.save_manifest(manifest)
 
+    _log("stage 5/5 assembling story bundle")
     bundle = _build_bundle(
         document,
         cards,
@@ -2128,6 +2258,12 @@ async def compile_document(
         }
     )
     workspace.save_manifest(manifest)
+    _log(
+        f"compile complete: {len(bundle.entities)} entities / {len(bundle.canon_facts)} facts / "
+        f"{len(bundle.relationships)} relationships / {len(arcs)} arcs"
+    )
+    _log(f"bundle: {workspace.bundle_path}")
+    _log(f"world book: {workspace.world_info_path}")
     return bundle, manifest
 
 

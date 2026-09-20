@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml  # type: ignore[import-untyped]
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# The only bundle schema this runtime understands. Bump this when the on-disk
+# contract changes and decide the migration policy at that boundary — loaders
+# must never silently accept an unknown version.
+BUNDLE_SCHEMA_VERSION = 1
 
 
 class FactVisibility(StrEnum):
@@ -87,6 +93,14 @@ class BeatChoice(BaseModel):
     reveal_fact_ids: list[str] = Field(default_factory=list)
 
 
+class SceneBoundary(BaseModel):
+    """Authored scene scope for writing and semantic review, not committed facts."""
+
+    entry_facts: list[str] = Field(default_factory=list)
+    exit_facts: list[str] = Field(min_length=1)
+    forbidden_events: list[str] = Field(default_factory=list)
+
+
 class StoryBeat(BaseModel):
     beat_id: str
     arc_id: str
@@ -101,6 +115,7 @@ class StoryBeat(BaseModel):
     decision_required: bool = True
     choices: list[BeatChoice] = Field(default_factory=list)
     terminal: bool = False
+    boundary: SceneBoundary | None = None
 
 
 class StyleProfile(BaseModel):
@@ -113,7 +128,7 @@ class StyleProfile(BaseModel):
 class StoryBundle(BaseModel):
     """An immutable, portable story package consumed by Story Mode."""
 
-    schema_version: int = 1
+    schema_version: int = BUNDLE_SCHEMA_VERSION
     story_id: str
     title: str
     locale: str = "en"
@@ -127,6 +142,16 @@ class StoryBundle(BaseModel):
     story_beats: list[StoryBeat]
     style_profile: StyleProfile = Field(default_factory=StyleProfile)
     optional_rules: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _check_schema_version(cls, value: int) -> int:
+        if value != BUNDLE_SCHEMA_VERSION:
+            raise ValueError(
+                "unsupported story bundle schema version: "
+                f"{value} (supported: {BUNDLE_SCHEMA_VERSION})"
+            )
+        return value
 
     @model_validator(mode="after")
     def validate_references(self) -> StoryBundle:
@@ -165,6 +190,8 @@ class StoryBundle(BaseModel):
                 )
 
         for beat in self.story_beats:
+            if not beat.terminal and not beat.decision_required and len(beat.choices) != 1:
+                raise ValueError("automatic story beats must have exactly one continuation")
             if beat.arc_id not in arc_ids and self.plot_arcs:
                 raise ValueError(f"beat {beat.beat_id!r} references unknown arc {beat.arc_id!r}")
             unknown_entities = set(beat.present_entities) - entity_ids
@@ -196,6 +223,17 @@ class StoryBundle(BaseModel):
         if self.story_beats[0].terminal:
             raise ValueError("the first story beat cannot be terminal")
         return self
+
+    @property
+    def content_digest(self) -> str:
+        """Pin a session to this validated resource, including its decision policy."""
+        document = self.model_dump(mode="json")
+        # Preserve existing v1 pins when this optional scene scope is absent.
+        for beat in document["story_beats"]:
+            if beat.get("boundary") is None:
+                beat.pop("boundary", None)
+        payload = json.dumps(document, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @property
     def first_beat(self) -> StoryBeat:
