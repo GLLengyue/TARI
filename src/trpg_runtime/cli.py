@@ -490,23 +490,37 @@ def story_play(
     bundle: str,
     session_id: str,
     branch_id: str = "main",
+    player_name: str = typer.Option(
+        "旅人", "--player-name", help="Your name, used when a new session is created."
+    ),
     author: str = typer.Option(
         "fake",
         "--author",
         help="Narrative author: fake (offline) or llm (OpenAI-compatible endpoint).",
     ),
 ):
-    """Play a Story Bundle session with a fake or OpenAI-compatible author."""
+    """Play a Story Bundle session interactively.
+
+    One command for the whole loop: /read N reads the next scenes; anything you
+    type at a decision point becomes a freeform action the world must answer;
+    /done leaves the segment; choice ids (like stay) also work.
+    """
     story_bundle = load_bundle(bundle)
     s = story_store()
+    runtime = NarrativeOrchestrator(s, story_bundle, _story_author(author))
     try:
         state = s.load_story_snapshot(session_id, branch_id)
     except KeyError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    runtime = NarrativeOrchestrator(s, story_bundle, _story_author(author))
+        if branch_id != "main":
+            raise typer.BadParameter(str(exc)) from exc
+        state = asyncio.run(
+            runtime.start_session(PlayerIdentity(display_name=player_name), session_id=session_id)
+        )
+        console.print(f"[dim]新会话已创建：{session_id}[/dim]")
 
     console.print(Panel(_story_prompt(story_bundle, state), title=state.title))
     _print_story_choices(state)
+    reader = StoryReader(runtime)
     try:
         while True:
             if state.status == "completed":
@@ -528,18 +542,68 @@ def story_play(
                 )
                 _print_story_choices(state)
                 continue
+            if text.startswith("/read"):
+                parts = text.split()
+                count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 3
+                request = ReadingRequest(
+                    request_id=str(uuid.uuid4()), max_scenes=max(1, min(8, count))
+                )
+                try:
+                    batch = asyncio.run(reader.read(state.session_id, request, state.branch_id))
+                except Exception as exc:
+                    console.print(f"[red]Reading stopped: {exc}[/red]")
+                    state = s.load_story_snapshot(state.session_id, state.branch_id)
+                    continue
+                for scene in batch.scenes:
+                    console.print(Panel(scene.narrative, title=f"Scene {scene.turn_number}"))
+                state = s.load_story_snapshot(state.session_id, state.branch_id)
+                if batch.stop_reason == "completed":
+                    console.print("[bold green]Story completed.[/bold green]")
+                    break
+                if batch.stop_reason == "awaiting_choice":
+                    console.print(
+                        "[cyan]轮到你了：直接打字演你想做的事，或输入选项（如 stay）。[/cyan]"
+                    )
+                else:
+                    console.print("（想继续读，输入 /read N）")
+                _print_story_choices(state)
+                continue
+            if text == "/done":
+                try:
+                    state = runtime.close_segment(state, resolution="")
+                    console.print("自由段结束。输入 /read N 回到长篇叙述。")
+                except Exception as exc:
+                    console.print(f"[red]{exc}[/red]")
+                continue
             if not text:
                 continue
-            incoming = _story_input_from_text(state, text)
+            choice_ids = {choice.choice_id for choice in state.available_choices}
             try:
+                if text in choice_ids:
+                    incoming = NarrativeInput(choice_id=text, input_mode="choice")
+                    state, result = asyncio.run(
+                        runtime.process_turn(state, incoming, request_id=str(uuid.uuid4()))
+                    )
+                    console.print(Panel(result.narrative, title=f"Turn {result.turn_number}"))
+                    _print_story_choices(state)
+                    continue
+                # Anything else is a freeform action: the segment opens by itself.
+                if state.active_segment is None or state.active_segment.status != "open":
+                    beat = story_bundle.beat(state.current_beat_id)
+                    state = runtime.open_segment(
+                        state, tension=_segment_tension(beat), stakes=beat.pressure
+                    )
                 state, result = asyncio.run(
-                    runtime.process_turn(state, incoming, request_id=str(uuid.uuid4()))
+                    runtime.process_freeform_action(state, text, request_id=str(uuid.uuid4()))
                 )
+                console.print(Panel(result.narrative, title=f"Turn {result.turn_number}"))
+                if not result.debug.get("feasible", True):
+                    console.print("[yellow]（世界没有接受这个行动 —— 状态未变。）[/yellow]")
+                if result.debug.get("tension_resolved"):
+                    console.print("[cyan]张力已解决，自由段结束。输入 /read N 继续。[/cyan]")
             except Exception as exc:
                 console.print(f"[red]Story turn failed: {exc}[/red]")
-                continue
-            console.print(Panel(result.narrative, title=f"Turn {result.turn_number}"))
-            _print_story_choices(state)
+                state = s.load_story_snapshot(state.session_id, state.branch_id)
     finally:
         asyncio.run(runtime.author.aclose())
 

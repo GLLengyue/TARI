@@ -325,3 +325,39 @@ def test_cli_story_act_round_trip(tmp_path, monkeypatch):
     )
     assert refused.exit_code == 0, refused.output
     assert "状态未发生任何变化" in refused.output
+
+
+def test_cli_story_play_is_one_command(tmp_path, monkeypatch):
+    """The whole loop in one command: /read, type freely, /done, quit."""
+    monkeypatch.setenv("TRPG_DB_PATH", str(tmp_path / "cli.db"))
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "story-play",
+            str(SAMPLE),
+            "repl-demo",
+            "--player-name",
+            "林岑",
+        ],
+        input="/read 2\n我砸开储物间的门\n/done\n/quit\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "新会话已创建" in result.output
+    assert "Scene 1" in result.output
+    assert "轮到你了" in result.output
+    assert "Turn" in result.output
+    assert "自由段结束" in result.output
+
+    # the freeform action really landed in the world
+    import json
+    import sqlite3
+
+    con = sqlite3.connect(tmp_path / "cli.db")
+    state = json.loads(
+        con.execute(
+            "SELECT state_json FROM story_snapshots WHERE session_id='repl-demo' AND branch_id='main'"
+        ).fetchone()[0]
+    )
+    assert state["variables"]["last_action"] == "我砸开储物间的门"
+    assert state["active_segment"] is None
