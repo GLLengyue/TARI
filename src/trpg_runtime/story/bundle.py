@@ -141,6 +141,7 @@ class StoryBundle(BaseModel):
     plot_arcs: list[PlotArc] = Field(default_factory=list)
     story_beats: list[StoryBeat]
     style_profile: StyleProfile = Field(default_factory=StyleProfile)
+    world_profile: str = ""
     optional_rules: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("schema_version")

@@ -325,9 +325,7 @@ def branch_session(
     """Thin Typer wrapper around :func:`narrative.workflow.branch_session`."""
     from .narrative.workflow import branch_session as _branch_session
 
-    return _branch_session(
-        session_id, branch_id, from_branch=from_branch, store=store
-    )
+    return _branch_session(session_id, branch_id, from_branch=from_branch, store=store)
 
 
 def compile_bundle(
@@ -445,9 +443,7 @@ def story_import(
         f"Source: {document.title} | chapters: {len(document.chapters)} | "
         f"compiler: {bundle.optional_rules['compiler']}"
     )
-    console.print(
-        f"Next: trpg story-new {output_path} --session-id {bundle.story_id}-demo"
-    )
+    console.print(f"Next: trpg story-new {output_path} --session-id {bundle.story_id}-demo")
 
 
 @app.command("story-new")
@@ -482,9 +478,7 @@ def story_new(
         seed=seed,
     )
     console.print(Panel(_story_prompt(story_bundle, state), title=state.title))
-    console.print(
-        f"Session created: [bold]{state.session_id}[/bold] | branch: {state.branch_id}"
-    )
+    console.print(f"Session created: [bold]{state.session_id}[/bold] | branch: {state.branch_id}")
     _print_story_choices(state)
     console.print(
         f"Next: trpg story-play {bundle} {state.session_id} --branch-id {state.branch_id}"
@@ -588,6 +582,85 @@ def story_read(
     console.print(messages[result.stop_reason])
     for item in result.choices:
         console.print(f"  {item.choice_id}: {item.text}")
+
+
+def _segment_tension(beat) -> str:
+    """Derive the opening tension of a segment from the beat we are standing on."""
+    parts: list[str] = []
+    if beat.dramatic_goal.strip():
+        parts.append(beat.dramatic_goal.strip())
+    if beat.pressure.strip():
+        parts.append("压力：" + beat.pressure.strip())
+    if beat.choices:
+        parts.append("可能的走向：" + "；".join(choice.text for choice in beat.choices))
+    return "\n".join(parts) or f"当前场景：{beat.title}"
+
+
+@app.command("story-act")
+def story_act(
+    bundle: str,
+    session_id: str,
+    action: str = typer.Argument("", help="What you do, in your own words."),
+    branch_id: str = "main",
+    tension: str | None = typer.Option(None, help="Override the tension that opens the segment."),
+    close: bool = typer.Option(False, "--close", help="Leave the segment without acting."),
+    request_id: str | None = typer.Option(None, help="Reuse the same ID to resume or replay."),
+    author: str = typer.Option("fake", help="Writer: fake (offline) or llm."),
+):
+    """Act freely inside a segment. The action really changes the world.
+
+    Opens a segment automatically when none is running. An action the world
+    refuses still produces prose, but changes no state at all.
+    """
+    store = story_store()
+    runtime = NarrativeOrchestrator(store, load_bundle(bundle), _story_author(author))
+    try:
+        state = store.load_story_snapshot(session_id, branch_id)
+    except KeyError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    async def run():
+        try:
+            current = state
+            opened_tension = ""
+            open_segment = current.active_segment is None or current.active_segment.status != "open"
+            if open_segment:
+                if close:
+                    return current, None, ""
+                beat = runtime.bundle.beat(current.current_beat_id)
+                current = runtime.open_segment(
+                    current,
+                    tension=tension or _segment_tension(beat),
+                    stakes=beat.pressure,
+                )
+                opened_tension = (
+                    current.active_segment.tension if current.active_segment is not None else ""
+                )
+            if close:
+                return runtime.close_segment(current, resolution=action), None, opened_tension
+            ruled = await runtime.process_freeform_action(current, action, request_id)
+            return ruled[0], ruled[1], opened_tension
+        finally:
+            await runtime.author.aclose()
+
+    try:
+        _, result, opened_tension = asyncio.run(run())
+    except Exception as exc:
+        console.print(f"[red]Action stopped: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    if result is None:
+        console.print("自由段没有在进行中。" if close else "自由段已结束，控制权交回长篇叙述。")
+        return
+    if opened_tension:
+        console.print(Panel(opened_tension, title="进入自由段：你现在可以自由行动"))
+    console.print(Panel(result.narrative, title=f"Turn {result.turn_number}"))
+    if not result.debug.get("feasible", True):
+        console.print("[yellow]世界没有接受这个行动：状态未发生任何变化。[/yellow]")
+    if result.debug.get("tension_resolved"):
+        console.print("张力已解决，自由段结束。用 story-read 继续长篇部分。")
+    else:
+        console.print("自由段仍然开着。继续行动请再次运行 story-act，并使用新的 --request-id。")
 
 
 @app.command("story-branch")

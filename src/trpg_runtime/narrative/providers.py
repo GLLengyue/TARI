@@ -16,7 +16,7 @@ from ..llm import (
 from ..story.bundle import BeatChoice, StoryBeat, StoryBundle
 from .author import NarrativeAuthor
 from .context import build_author_context
-from .domain import NarrativeDraft, StorySessionState
+from .domain import ActionRuling, NarrativeDraft, StorySessionState
 
 _SYSTEM_PROMPT = (
     "You are the prose author for an auditable interactive-fiction runtime.\n"
@@ -51,6 +51,11 @@ _REVIEW_PROMPT = (
     'Return only JSON: {"accepted":true,"violations":[]}. '
     "Use accepted=false and concise concrete violations when any of these checks fail."
 )
+
+
+_RULING_INSTRUCTION = "请裁定上面这条玩家行动。只返回 JSON 对象，不要任何解释文字。"
+
+_AUTHOR_INSTRUCTION = "现在写出这一幕的正文。只输出正文本身，不要输出解释或结构化字段。"
 
 
 class SceneReview(BaseModel):
@@ -197,6 +202,58 @@ class OpenAINarrativeAuthor(NarrativeAuthor):
             narrative=narrative,
             debug={"author": "openai-compatible", "model": self.settings.model, **review_debug},
         )
+
+    async def rule_action(
+        self,
+        messages: Sequence[dict[str, str]],
+        action: str,
+    ) -> tuple[ActionRuling, dict[str, Any]]:
+        """Rule one freeform action.
+
+        The request is ``messages + action + instruction``. The narration call
+        below reuses that exact prefix, so a cached prefix keeps hitting.
+        """
+        request = [
+            *messages,
+            {"role": "user", "content": action},
+            {"role": "user", "content": _RULING_INSTRUCTION},
+        ]
+        payload = await self._client.complete_json(request, temperature=0.2, max_tokens=1500)
+        ruling = ActionRuling.model_validate(payload)
+        if not ruling.world_response.strip():
+            raise ValueError("ruling did not include a world_response")
+        debug = {
+            "author": "openai-compatible",
+            "model": self.settings.model,
+            "feasible": ruling.feasible,
+            "consequence_count": len(ruling.consequences),
+        }
+        return ruling, debug
+
+    async def narrate_action(
+        self,
+        messages: Sequence[dict[str, str]],
+        action: str,
+        ruling: ActionRuling,
+    ) -> str:
+        """Write the scene for an already-ruled action.
+
+        Extends the ruling request instead of rebuilding it: the whole ruling
+        prompt is a prefix of this one, which is what keeps the cache warm.
+        """
+        request = [
+            *messages,
+            {"role": "user", "content": action},
+            {
+                "role": "assistant",
+                "content": json.dumps(ruling.model_dump(mode="json"), ensure_ascii=False),
+            },
+            {"role": "user", "content": _AUTHOR_INSTRUCTION},
+        ]
+        prose = (await self._client.complete_text(request)).strip()
+        if not prose:
+            raise ValueError("author returned empty prose")
+        return prose
 
 
 __all__ = ["LLMSettings", "OpenAINarrativeAuthor", "resolve_llm_settings"]

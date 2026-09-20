@@ -12,6 +12,8 @@ from ..story.bundle import BeatChoice, FactVisibility, StoryBeat, StoryBundle
 from .author import NarrativeAuthor, default_identity
 from .domain import (
     CanonPolicy,
+    FreeformAction,
+    FreeformSegment,
     NarrativeAuthorProposal,
     NarrativeChoice,
     NarrativeInput,
@@ -20,6 +22,7 @@ from .domain import (
     StoryDecision,
     StorySessionState,
 )
+from .session_context import build_messages, build_static_prefix
 from .storage import StoryConflict, StoryStore
 from .transitions import resolve_transition
 
@@ -112,6 +115,7 @@ class NarrativeOrchestrator:
             current_beat_id=first.beat_id,
             player_identity=identity,
             variables={"trust": 0},
+            initial_variables={"trust": 0},
             available_choices=[NarrativeChoice.from_spec(choice) for choice in first.choices],
             last_narrative=self.bundle.opening,
         )
@@ -257,6 +261,278 @@ class NarrativeOrchestrator:
     def fork(self, state: StorySessionState, branch_id: str) -> StorySessionState:
         """Create a child timeline without mutating the parent snapshot."""
         return self.store.create_story_branch(state, branch_id)
+
+    def open_segment(
+        self,
+        state: StorySessionState,
+        *,
+        tension: str,
+        stakes: str = "",
+    ) -> StorySessionState:
+        """Enter a freeform segment at a live tension.
+
+        The tension is what the player must resolve; it is written to the event
+        log rather than the prompt prefix so the prefix stays byte-identical.
+        """
+        if state.active_segment is not None and state.active_segment.status == "open":
+            raise RuleViolation("a freeform segment is already open")
+        tension = tension.strip()
+        if not tension:
+            raise RuleViolation("a freeform segment needs a tension")
+
+        turn = state.turn_number + 1
+        segment = FreeformSegment(
+            segment_id=f"segment-{turn:04d}",
+            entry_beat_id=state.current_beat_id,
+            tension=tension,
+            stakes=stakes.strip(),
+        )
+        trial = state.model_dump(mode="python")
+        trial["active_segment"] = segment.model_dump(mode="python")
+        trial["available_choices"] = []
+        trial["turn_number"] = turn
+        trial["version"] = state.version + 1
+        new_state = StorySessionState.model_validate(trial)
+
+        tx = self.store.begin_story_turn(
+            state.session_id, state.branch_id, turn, expected_version=state.version
+        )
+        try:
+            tx.append(
+                "story_segment_opened",
+                {
+                    "segment_id": segment.segment_id,
+                    "entry_beat_id": segment.entry_beat_id,
+                    "tension": segment.tension,
+                    "stakes": segment.stakes,
+                },
+            )
+            tx.append(
+                "story_turn_completed",
+                {"status": new_state.status, "version": new_state.version},
+            )
+        except Exception as exc:
+            tx.abort(str(exc))
+            raise
+        tx.commit(new_state)
+        self._progress("segment_opened", turn=turn, segment_id=segment.segment_id)
+        return new_state
+
+    def close_segment(
+        self,
+        state: StorySessionState,
+        *,
+        resolution: str = "",
+    ) -> StorySessionState:
+        """Leave the freeform segment and hand control back to the long form."""
+        segment = state.active_segment
+        if segment is None or segment.status != "open":
+            raise RuleViolation("no freeform segment is open")
+        current = self.bundle.beat(state.current_beat_id)
+        turn = state.turn_number + 1
+        text = resolution.strip() or "玩家结束了这一段。"
+
+        trial = state.model_dump(mode="python")
+        trial["active_segment"] = None
+        trial["turn_number"] = turn
+        trial["version"] = state.version + 1
+        trial["available_choices"] = [
+            NarrativeChoice.from_spec(choice).model_dump() for choice in current.choices
+        ]
+        new_state = StorySessionState.model_validate(trial)
+
+        tx = self.store.begin_story_turn(
+            state.session_id, state.branch_id, turn, expected_version=state.version
+        )
+        try:
+            tx.append(
+                "story_segment_resolved",
+                {"segment_id": segment.segment_id, "resolution": text},
+            )
+            tx.append(
+                "story_turn_completed",
+                {"status": new_state.status, "version": new_state.version},
+            )
+        except Exception as exc:
+            tx.abort(str(exc))
+            raise
+        tx.commit(new_state)
+        self._progress("segment_resolved", turn=turn, segment_id=segment.segment_id)
+        return new_state
+
+    async def process_freeform_action(
+        self,
+        state: StorySessionState,
+        action: str,
+        request_id: str | None = None,
+    ) -> tuple[StorySessionState, NarrativeTurnResult]:
+        """Run one turn inside an open freeform segment.
+
+        The action is ruled first and narrated second. Both provider calls share
+        the same request prefix (the narration call merely appends to it), so the
+        provider cache keeps hitting across the pair and across turns.
+
+        A rejected action writes prose and no state: the world answers in-story.
+        """
+        if request_id is not None:
+            try:
+                cached = self.store.load_story_turn_result(
+                    request_id, state.session_id, state.branch_id
+                )
+            except ValueError as exc:
+                raise RuleViolation(str(exc)) from exc
+            if cached is not None:
+                return self.store.load_story_snapshot(cached.session_id, cached.branch_id), cached
+
+        text = action.strip()
+        if not text:
+            raise RuleViolation("a freeform action cannot be empty")
+
+        persisted = self.store.load_story_snapshot(state.session_id, state.branch_id)
+        if persisted != state:
+            raise StoryConflict("conflicting story turn commit: stale state; reload before writing")
+        if state.story_id != self.bundle.story_id or (
+            state.bundle_digest is not None and state.bundle_digest != self.bundle.content_digest
+        ):
+            raise StoryConflict("story bundle changed; restore the session's original bundle")
+        if state.status != "active":
+            raise RuleViolation("story session is not active")
+
+        segment = state.active_segment
+        if segment is None or segment.status != "open":
+            raise RuleViolation("no freeform segment is open; use story-read for beat transitions")
+
+        current = self.bundle.beat(state.current_beat_id)
+        turn = state.turn_number + 1
+        prefix = build_static_prefix(self.bundle, state)
+        events = self.store.story_events(state.session_id, state.branch_id)
+        messages = build_messages(prefix, events)
+
+        self._progress("player_action", turn=turn, segment_id=segment.segment_id)
+        # Both calls below extend the same prefix, so the cache stays warm.
+        ruling, ruling_debug = await self.author.rule_action(messages, text)
+        # Validate the declared consequences before spending the narration call.
+        if ruling.feasible:
+            _apply_state_patches(state, ruling.consequences)
+
+        self._progress("authoring", turn=turn)
+        prose = await self.author.narrate_action(messages, text, ruling)
+        if not prose.strip():
+            raise RuleViolation("narrative author returned empty prose")
+
+        resolved = bool(ruling.tension_resolved)
+        record = FreeformAction(
+            turn=turn,
+            player_input=text,
+            feasible=bool(ruling.feasible),
+            reason=ruling.reason,
+            world_response=prose,
+            patches=list(ruling.consequences),
+            tension_resolved=resolved,
+        )
+
+        base = _apply_state_patches(state, ruling.consequences) if ruling.feasible else state
+        trial = base.model_dump(mode="python")
+        trial["version"] = state.version + 1
+        trial["turn_number"] = turn
+        trial["last_narrative"] = prose
+        grown = segment.model_copy(deep=True)
+        grown.actions.append(record)
+        if resolved:
+            grown.status = "resolved"
+            grown.resolution = ruling.resolution.strip() or text
+            trial["active_segment"] = None
+            trial["available_choices"] = [
+                NarrativeChoice.from_spec(choice).model_dump() for choice in current.choices
+            ]
+        else:
+            trial["active_segment"] = grown.model_dump(mode="python")
+            trial["available_choices"] = []
+        new_state = StorySessionState.model_validate(trial)
+
+        tx = self.store.begin_story_turn(
+            state.session_id, state.branch_id, turn, expected_version=state.version
+        )
+        try:
+            tx.append(
+                "story_player_input_received",
+                {
+                    "text": text,
+                    "input_mode": "freeform",
+                    "choice_id": None,
+                    "automatic": False,
+                    "segment_id": segment.segment_id,
+                },
+            )
+            tx.append(
+                "story_action_ruled",
+                {
+                    "segment_id": segment.segment_id,
+                    "feasible": bool(ruling.feasible),
+                    "reason": ruling.reason,
+                    "consequences": [
+                        patch.model_dump(mode="json") for patch in ruling.consequences
+                    ],
+                    "tension_resolved": resolved,
+                    "debug": ruling_debug,
+                },
+            )
+            tx.append(
+                "story_narrative_emitted",
+                {"beat_id": current.beat_id, "text": prose, "source_refs": []},
+            )
+            tx.append(
+                "story_state_updated",
+                {
+                    "current_beat_id": new_state.current_beat_id,
+                    "completed_beat_ids": new_state.completed_beat_ids,
+                    "revealed_fact_ids": sorted(new_state.revealed_fact_ids),
+                    "patches": [
+                        patch.model_dump(mode="json")
+                        for patch in (ruling.consequences if ruling.feasible else [])
+                    ],
+                    "version": new_state.version,
+                    "decisions": [decision.model_dump() for decision in new_state.decisions],
+                },
+            )
+            if resolved:
+                tx.append(
+                    "story_segment_resolved",
+                    {"segment_id": segment.segment_id, "resolution": grown.resolution},
+                )
+            tx.append(
+                "story_turn_completed",
+                {"status": new_state.status, "version": new_state.version},
+            )
+            result = NarrativeTurnResult(
+                session_id=new_state.session_id,
+                story_id=new_state.story_id,
+                branch_id=new_state.branch_id,
+                turn_number=turn,
+                player_input=text,
+                input_mode="freeform",
+                choice_id=None,
+                narrative=prose,
+                narrative_beat_id=current.beat_id,
+                current_beat_id=new_state.current_beat_id,
+                choices=new_state.available_choices,
+                revealed_fact_ids=[],
+                source_refs=[],
+                ended=new_state.status == "completed",
+                debug={
+                    "feasible": bool(ruling.feasible),
+                    "tension_resolved": resolved,
+                    "segment_id": segment.segment_id,
+                    **ruling_debug,
+                },
+            )
+        except Exception as exc:
+            tx.abort(str(exc))
+            raise
+
+        tx.commit(new_state, request_id=request_id, result=result)
+        self._progress("completed", turn=turn, branch_id=new_state.branch_id)
+        return new_state, result
 
     @staticmethod
     def _validate_legacy_transition(
