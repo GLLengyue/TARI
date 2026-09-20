@@ -356,7 +356,8 @@ def test_cli_story_play_is_one_command(tmp_path, monkeypatch):
     con = sqlite3.connect(tmp_path / "cli.db")
     state = json.loads(
         con.execute(
-            "SELECT state_json FROM story_snapshots WHERE session_id='repl-demo' AND branch_id='main'"
+            "SELECT state_json FROM story_snapshots "
+            "WHERE session_id='repl-demo' AND branch_id='main'"
         ).fetchone()[0]
     )
     assert state["variables"]["last_action"] == "我砸开储物间的门"
