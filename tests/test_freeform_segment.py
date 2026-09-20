@@ -26,6 +26,7 @@ from trpg_runtime.narrative.session_context import (
     build_static_prefix,
     prefix_fingerprint,
     project_events,
+    render_state_snapshot,
 )
 from trpg_runtime.rules import RuleViolation
 from trpg_runtime.story import load_bundle
@@ -239,6 +240,64 @@ def test_stale_state_is_rejected(tmp_path):
     act(runtime, state, "我砸开门", "a1")
     with pytest.raises(StoryConflict):
         act(runtime, stale, "我再来一次", "a2")
+
+
+# --- state snapshots: the model reads the ledger, never recalls -------------
+
+
+def test_snapshot_drops_bookkeeping_keys():
+    payload = {"variables": {"trust": 1, "last_input": "继续阅读", "last_choice": "x"}}
+    rendered = render_state_snapshot(payload)
+    assert "trust=1" in rendered
+    assert "last_input" not in rendered
+    assert "last_choice" not in rendered
+
+
+def test_snapshot_rendering_is_deterministic():
+    payload = {"variables": {"b": 2, "a": 1}, "relationship_values": {"r": 3}}
+    assert render_state_snapshot(payload) == render_state_snapshot(
+        dict(reversed(list(payload.items())))
+    )
+
+
+def test_snapshot_is_journaled_and_projected(tmp_path):
+    """The runtime writes the snapshot; the model reads it next turn."""
+    author = RecordingAuthor()
+    _, store, runtime, state = setup(tmp_path, author=author)
+    state = runtime.open_segment(state, tension="门锁着")
+    state, _ = act(runtime, state, "我砸开门", "a1")
+
+    events = store.story_events("ferry", "main")
+    snapshots = [event for event in events if event["type"] == "story_state_snapshot"]
+    assert len(snapshots) == 2  # one from open_segment, one from the action
+
+    rendered = render_state_snapshot(snapshots[-1]["payload"])
+    assert rendered.startswith("（旁白）当前状态：")
+    assert "last_action=我砸开门" in rendered
+
+    projected = project_events(events)
+    assert rendered in [message["content"] for message in projected]
+    # the template forbids system after the first message; snapshots are user
+    assert all(message["role"] != "system" for message in projected[1:])
+
+
+def test_later_snapshot_reflects_the_latest_state(tmp_path):
+    """The model must read the newest value, not re-add deltas itself."""
+    _, store, runtime, state = setup(tmp_path)
+    state = runtime.open_segment(state, tension="门锁着")
+    state, _ = act(runtime, state, "第一步", "a1")
+    state, _ = act(runtime, state, "第二步", "a2")
+
+    events = store.story_events("ferry", "main")
+    snapshots = [event for event in events if event["type"] == "story_state_snapshot"]
+    rendered = render_state_snapshot(snapshots[-1]["payload"])
+    assert "last_action=第二步" in rendered
+
+    projected = project_events(events)
+    contents = [
+        message["content"] for message in projected if "当前状态" in str(message.get("content"))
+    ]
+    assert "last_action=第二步" in contents[-1]
 
 
 # --- CLI --------------------------------------------------------------------

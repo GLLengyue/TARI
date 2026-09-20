@@ -585,14 +585,19 @@ def story_read(
 
 
 def _segment_tension(beat) -> str:
-    """Derive the opening tension of a segment from the beat we are standing on."""
+    """Derive the opening tension of a segment from the beat we are standing on.
+
+    Preset choices are deliberately excluded: a freeform segment exists so the
+    player can find routes nobody wrote down, and feeding the menu back to the
+    ruling model just makes it grade actions against the list.
+    """
     parts: list[str] = []
     if beat.dramatic_goal.strip():
         parts.append(beat.dramatic_goal.strip())
     if beat.pressure.strip():
         parts.append("压力：" + beat.pressure.strip())
-    if beat.choices:
-        parts.append("可能的走向：" + "；".join(choice.text for choice in beat.choices))
+    if beat.narrative.strip():
+        parts.append("此刻：" + beat.narrative.strip()[:200])
     return "\n".join(parts) or f"当前场景：{beat.title}"
 
 

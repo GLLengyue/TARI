@@ -74,6 +74,25 @@ def _apply_state_patches(state: StorySessionState, patches) -> StorySessionState
     return StorySessionState.model_validate(trial)
 
 
+def _state_snapshot_payload(state: StorySessionState, turn: int) -> dict[str, Any]:
+    """Full authoritative state after a turn.
+
+    The runtime produces this, never a model: the snapshot is the model's only
+    view of state, so a recalled version could drift without anything catching
+    it. Journaled whole (not as a delta) so the reader never has to add up.
+    """
+    return {
+        "turn": turn,
+        "version": state.version,
+        "variables": dict(state.variables),
+        "relationship_values": dict(state.relationship_values),
+        "completed_beat_ids": list(state.completed_beat_ids),
+        "active_segment_id": (
+            state.active_segment.segment_id if state.active_segment is not None else None
+        ),
+    }
+
+
 class NarrativeOrchestrator:
     """One-call-per-decision interactive narrative runtime."""
 
@@ -227,6 +246,7 @@ class NarrativeOrchestrator:
                     "decisions": [decision.model_dump() for decision in new_state.decisions],
                 },
             )
+            tx.append("story_state_snapshot", _state_snapshot_payload(new_state, turn))
             tx.append(
                 "story_turn_completed",
                 {"status": new_state.status, "version": new_state.version},
@@ -307,6 +327,7 @@ class NarrativeOrchestrator:
                     "stakes": segment.stakes,
                 },
             )
+            tx.append("story_state_snapshot", _state_snapshot_payload(new_state, turn))
             tx.append(
                 "story_turn_completed",
                 {"status": new_state.status, "version": new_state.version},
@@ -349,6 +370,7 @@ class NarrativeOrchestrator:
                 "story_segment_resolved",
                 {"segment_id": segment.segment_id, "resolution": text},
             )
+            tx.append("story_state_snapshot", _state_snapshot_payload(new_state, turn))
             tx.append(
                 "story_turn_completed",
                 {"status": new_state.status, "version": new_state.version},
@@ -495,6 +517,7 @@ class NarrativeOrchestrator:
                     "decisions": [decision.model_dump() for decision in new_state.decisions],
                 },
             )
+            tx.append("story_state_snapshot", _state_snapshot_payload(new_state, turn))
             if resolved:
                 tx.append(
                     "story_segment_resolved",

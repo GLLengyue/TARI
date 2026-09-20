@@ -55,7 +55,10 @@ _REVIEW_PROMPT = (
 
 _RULING_INSTRUCTION = "请裁定上面这条玩家行动。只返回 JSON 对象，不要任何解释文字。"
 
-_AUTHOR_INSTRUCTION = "现在写出这一幕的正文。只输出正文本身，不要输出解释或结构化字段。"
+_AUTHOR_INSTRUCTION = (
+    "现在写出这一幕的正文。只输出正文本身；不要复述之前场景已经发生的内容，"
+    "不要输出解释或结构化字段。"
+)
 
 
 class SceneReview(BaseModel):
