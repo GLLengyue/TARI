@@ -1,33 +1,27 @@
 # TARI
 
-> **可审计、多 Agent 的 TRPG 运行时**<br>
-> **An auditable, multi-agent TRPG runtime**
+> **从原著素材到连续故事，玩家在关键处参与**<br>
+> **Source-grounded stories with meaningful, occasional player direction**
 
 ## 项目简介 | Overview
 
-TARI 用明确的权限边界把玩家、GM、NPC Actor、规则引擎和事件存储分开，目标是在保留自由叙事的同时，让世界事实、随机结果和角色知识可验证、可恢复。
+TARI 正在转向以故事阅读和低频共创为中心的产品：从书籍中提取人物、世界与冲突，让 LLM 持续创作有因果联系的场景，玩家在关键节点决定方向。状态、来源、分支和发布由运行时管理。
 
-TARI separates the player, GM, NPC actors, rules engine, and event store behind explicit authority boundaries. Its goal is to preserve freeform storytelling while making world facts, random outcomes, and character knowledge verifiable and recoverable.
+TARI is moving toward continuous, source-grounded storytelling with occasional player direction. The runtime owns state, provenance, branches, and publication; the writer focuses on prose.
 
-单一模型同时扮演世界、裁判、旁白和所有角色时，可能悄悄改写事实或夺取叙事控制权。TARI 的职责划分是：
-
-TARI addresses the failure modes of a single model acting as the world, referee, narrator, and every character:
-
-- **玩家 | Player**：决定玩家角色的意图 / decides the player character's intention.
-- **GM Agent**：提出检定和世界后果 / proposes checks and world consequences.
-- **Actor Agent**：表现一个 NPC 的台词和意图行动 / performs one NPC's speech and intended action.
-- **规则运行时 | Rules runtime**：拥有骰点、权限、Spotlight 和状态提交权 / owns dice, permissions, spotlight, and state commits.
-- **事件存储 | Event store**：记录世界如何演变到当前状态 / records how the world reached its current state.
+2026-09-16 的[产品方向](docs/product-direction.md)和[技术路线图](docs/technical-roadmap.md)是当前工作依据。传统多 Agent TRPG 作为既有实验模式保留，停止功能扩展。
 
 ## 当前版本 | Current status
 
-当前仍是 **v0.1 MVP**，重点是验证核心 loop 是否比单模型 RP 更稳定。本轮已完成 Story Mode 的第一条可验收 vertical slice：可恢复拆书编译、Story Bundle、local/OpenAI-compatible 写手，以及 CLI 和 HTTP 的会话、回合、事件与分支接口。传统多 Agent TRPG loop 仍按可靠性、可测试性和故障恢复优先推进，SillyTavern 适配器和成熟客户端仍在路线图中。
+当前仍是 **v0.1 原型**。已具备可恢复拆书编译、Story Bundle、CLI/HTTP 会话和分支接口。Story 提交已增加版本冲突保护；真实写手只返回正文，runtime 执行选择后果；写手输入包含身份、关系、公开历史与可见事实。
 
-The project remains at **v0.1 MVP**. This iteration delivers an acceptance-ready Story Mode vertical slice: resumable source compilation, Story Bundles, a local/OpenAI-compatible prose author, and CLI/HTTP session, turn, event, and branch surfaces. The traditional multi-agent TRPG loop still prioritizes reliability, testability, and recovery; a SillyTavern adapter and mature client remain on the roadmap.
+已新增[连续阅读](docs/reading-mode.md)：一次生成有限场景，在关键决定处暂停；同一请求可恢复已完成正文，新会话绑定故事包内容版本。可用原创样本 `examples/story/last_ferry.yaml` 体验一次介入后的两种走向。
 
-完整路线见 [技术路线图 | Technical Roadmap](docs/technical-roadmap.md)。
+完整的低频共创体验仍在建设：当前自动编译结果主要沿情节弧推进，尚无动态场景规划或专用阅读界面。场景图中的有意义分歧目前需要作者设计；文学质量需单独试读评估。
 
-## MVP 规则 | MVP rules
+The current release has resumable compilation, bounded and resumable scene continuation, and Story CLI/HTTP APIs. Dynamic scene planning and a dedicated reading UI remain planned work.
+
+## 既有 Campaign 规则 | Existing Campaign rules
 
 检定使用刻意保持简洁的 PbtA 风格 `2d6`：
 
@@ -125,6 +119,7 @@ trpg story-import SOURCE [--output FILE] [--story-id ID]
 trpg story-compile SOURCE --output-dir DIR [--story-id ID]  # 可恢复拆书编译
 trpg story-new BUNDLE --session-id ID
 trpg story-play BUNDLE SESSION_ID [--author fake|llm]
+trpg story-read BUNDLE SESSION_ID [--scenes 3] [--choice ID] [--request-id ID] [--author fake|llm]
 trpg story-branch SESSION_ID BRANCH_ID
 trpg inspect-state CAMPAIGN_ID [--all]
 trpg inspect-events CAMPAIGN_ID
@@ -213,19 +208,15 @@ StoryBundle -> NarrativeOrchestrator -> choice/freeform 解析
 
 ## 技术路线 | Roadmap
 
-路线遵循“先证明核心 loop，再加固可靠性，之后扩展角色和客户端”的顺序。路线图中的每个阶段都有退出条件，不以增加调用次数代替质量提升。
+详见[技术路线图](docs/technical-roadmap.md)：
 
-The roadmap follows “prove the core loop first, harden reliability next, then expand actors and clients.” Each phase has an exit gate; more model calls are not a substitute for quality.
+1. **S0**：Story 提交、来源、素材版本与恢复的可信基础（进行中）。
+2. **S1**：将原著知识加工为可持续创作的场景。
+3. **S2**：连续性记忆、有预算的续写、关键节点介入。
+4. **S3**：专用阅读与介入界面。
+5. **S4**：基于真实试读，迭代质量、等待时间与成本。
 
-主要里程碑（与 [技术路线图](docs/technical-roadmap.md) 的 M0–M6 一致，版本号表示能力阶段，不承诺日期）：
-
-Key milestones (aligned with M0–M6 in the [technical roadmap](docs/technical-roadmap.md); version labels are capability milestones, not calendar promises):
-
-1. **M0–M1 / v0.1**（已完成）：Story Mode vertical slice、可恢复拆书编译、共享 persistence/llm 内核 / completed Story Mode slice, resumable compilation, shared persistence/llm kernel
-2. **M2 / v0.2**：两个上下文的可靠性合同化——回合事务、幂等性、故障注入与恢复 / reliability contracts for both contexts: turn transactions, idempotency, failure injection, recovery
-3. **M3**：应用服务与适配层收敛（拆分 Web composition root、公开前的认证/限流/所有权） / application services and thin adapters, security gates before any public exposure
-4. **M4**：Story runtime 产品化（scene/anchor/timeline、统一 DecisionInput）；M5：Campaign 多 Actor、知识图谱、Spotlight 调度
-5. **M6**：provider capability 声明、流式 UX 通道、OpenAI-compatible facade 与 SillyTavern adapter / provider capabilities, non-authoritative streaming, then external adapters
+历史 Campaign 命令继续保留。上面的命令与能力说明描述现有实现，不代表多 Agent 即时互动仍是优先方向。
 
 ## 许可证 | License
 

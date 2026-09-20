@@ -2,6 +2,8 @@
 
 > 状态 / Status: 当前实现基线（2026-09）
 >
+> 2026-09-16 产品重心已调整为自动拆书、连续故事与低频介入，见 [product-direction.md](product-direction.md)。本文的领域隔离仍有效；Campaign 扩展不再阻塞 Story 主线。
+>
 > 本文描述已经落地的边界，以及下一阶段必须遵守的演进规则。架构目标不是把所有代码抽象成一套“万能 runtime”，而是在共享基础设施的前提下，保持不同叙事产品的状态模型和权威规则独立。
 
 ## 1. 设计结论 | Decisions
@@ -64,7 +66,7 @@ TARI 由两个业务上下文和一个共享内核组成：
 领域适配器仍然独立：
 
 - Campaign 使用 `agents.PydanticAISuite`，实现 GM/Actor/Auditor 的多 Agent typed contract；
-- Story 使用 `narrative.OpenAINarrativeAuthor`，只把 prose 生成适配为 `NarrativeAuthorProposal`；
+- Story 使用 `narrative.OpenAINarrativeAuthor`，返回只含正文和诊断的 `NarrativeDraft`；旧 `NarrativeAuthorProposal` 作为兼容及事件封装保留，权威字段由 runtime 构造；
 - Story compiler 直接使用 `llm.OpenAICompatibleClient`，不依赖 `narrative` 包。
 
 这保证了 provider 传输逻辑统一，同时不把“GM 裁定协议”和“互动小说写手协议”混成一个不明确的接口。未来可以在 `llm` 上增加 provider registry，但不能让 provider 直接获得状态写权限。
@@ -92,7 +94,7 @@ CampaignState
 - `runtime.py`：`TurnOrchestrator` 和回合状态机；
 - `storage.py`：追加式事件、快照、回合结果和恢复支持。
 
-Campaign 的下一步仍是可靠性加固，而不是立即接入更多客户端：GMPlan/GMResolution 的严格边界、故障注入、快照重建和多 Actor 都属于该上下文内部演进。
+Campaign 进入兼容维护，已知数据正确性问题按需修复。GMPlan/GMResolution、系统故障注入及多 Actor 属于该上下文内部的延后演进，不作为 Story 产品化的前置条件。
 
 ## 4. Story Context
 
@@ -128,18 +130,23 @@ TXT/Markdown source
 - `narrative.runtime`：选择解析、窄状态 patch、事实揭示、节拍推进和事务提交；
 - `narrative.storage`：事件、快照、分支和 request-id 幂等；
 - `narrative.providers`：把共享 LLM 文本客户端适配为 Story 写手。
+- `narrative.reading`：有限连续阅读服务，按场景的显式决策策略前进，持久化请求身份并从已提交回合恢复。
 
 单次回合的权威流程：
 
 ```text
 player input
-  -> runtime resolves available choice
-  -> author writes prose only
-  -> runtime validates beat / choices / reveals / patches
-  -> StoryStore atomically commits events + snapshot + result
+  -> runtime checks snapshot and resolves choice / effects / reveals
+  -> author receives public writing context and returns prose only
+  -> runtime checks draft (and exact legacy proposal compatibility)
+  -> StoryStore checks version and atomically commits events + snapshot + result
 ```
 
 自由行动不会自动推进节拍；选择的目标节拍、choice effects 和 terminal 状态来自 Bundle，不能由模型改写。分支只追加子时间线，不修改父快照。
+
+`narrative.transitions` 集中构造确定性结果；`narrative.context` 投影身份、风格、当前状态和公开历史。提交使用短写事务内的版本/回合校验，不在 LLM 生成期间持有数据库写锁。新并发请求可能重复生成，但只能有一个基于同一版本的结果提交；HTTP 将 `StoryConflict` 映射为 409。
+
+新会话固定 `bundle_digest`，关键玩家选择记录在 `decisions`。连续阅读的 `story_reading_runs` 保存请求参数、起始版本与最终报告；每段正文继续使用 Story 回合的原子提交和幂等结果，不在正文提交之后另写一个容易丢失的进度计数。达到预算、决定或结尾时停止，恢复时复用已提交场景。旧存档缺少摘要时不自动绑定当前素材，参见 [reading-mode.md](reading-mode.md)。
 
 ## 5. 适配层 | Adapters
 

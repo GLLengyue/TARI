@@ -32,7 +32,7 @@ The current slice provides:
 - `embody`, `possess`, `visitor`, and `replacement` identity types;
 - guided, strict, and sandbox canon-policy values;
 - one narrative-author call per decision;
-- narrow, validated author patches under `variables.*` and `relationship_values.*`;
+- runtime-derived choice effects under `variables.*` and `relationship_values.*`;
 - append-only story events and atomic story-turn snapshots;
 - request-id idempotency;
 - child branches that inherit parent history without mutating the parent snapshot;
@@ -42,6 +42,14 @@ The current slice provides:
 - a short mock E2E test plus an opt-in real local-LLM E2E test.
 
 The OpenAI-compatible author deliberately asks the model for prose only. The runtime derives the target beat, choices, facts, source references, terminal state, and declared choice effects from the immutable Story Bundle. This keeps malformed model output from changing the timeline.
+
+New authors return `NarrativeDraft(narrative=..., debug=...)`. Existing authors may still return `NarrativeAuthorProposal`, but every authoritative field must match the runtime-resolved turn, including the exact number of effects and authorized reveals. The runtime commits its own resolved fields, not the author's copies.
+
+The writer now receives player identity, style, current variables and relationships, the previous narrative, recent public history, and relevant public/authorized facts. Private diagnostic events and `author_only` fact records are excluded. Scene source prose itself is still trusted authored material and may contain spoilers; this projection does not establish semantic non-disclosure for arbitrary prose.
+
+Story commits check the expected version and turn inside a short SQLite write transaction. A stale or overlapping request raises `StoryConflict`; HTTP returns 409 and the client should reload before choosing how to continue. Completed request-id replay returns the stored result without calling the author. Overlapping requests can both generate, but only one can commit from the same version. Request IDs are globally unique within the Story database; reuse on another session/branch is rejected, while a completed key in the same session/branch replays its first result even if the input differs.
+
+The product focus is now continuous stories with occasional player direction; see [product direction](product-direction.md). Bounded, resumable continuation is available through `story-read` and HTTP `/read`; see [reading mode](reading-mode.md). It advances only explicitly automatic scenes and stops at player decisions. Dynamic scene planning remains future work. Existing freeform/continue/choice semantics below remain unchanged.
 
 `TARI_LLM_*` takes precedence. If it is unset, TARI reads the active OpenAI-compatible provider from `~/.evotai/evot.env` using evot's `EVOT_LLM_*` variables. An evot provider configured with the Anthropic protocol is not silently translated; configure OpenRouter explicitly with its OpenAI-compatible `/api/v1` endpoint when needed. For example:
 
