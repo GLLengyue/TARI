@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 .env
+.env.*
+.DS_Store
+.workbuddy/
 runtime-data/
 logs/
 .pytest_cache/
