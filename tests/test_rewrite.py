@@ -279,6 +279,77 @@ def test_tight_context_limit_triggers_compaction(tmp_path):
     assert len(state.ledger) == 6
 
 
+class VerboseSummaryAuthor(RecordingAuthor):
+    """Summaries at the length a real model produces, not a fake's one-liner."""
+
+    async def extract_chapter(self, chapter, title, prose):
+        body = "事件依次发生，人物关系随之变化。" * 12
+        return (
+            f"第 {chapter} 章：{body}",
+            [{"statement": f"第{chapter}章确立了偏离", "kind": "divergence"}],
+        )
+
+
+def test_compaction_triggers_at_realistic_summary_length(tmp_path):
+    """The fake's one-line summaries are too short to exercise this; real ones are not.
+
+    Without compaction the summary block grows without bound, so the threshold
+    here is set to what a dozen real chapters would actually occupy.
+    """
+    author = VerboseSummaryAuthor()
+    _, _, _, orchestrator = make_orchestrator(
+        tmp_path, chapters=12, author=author, recent=3, context_limit=2000
+    )
+    asyncio.run(orchestrator.start(INSTRUCTION))
+    state = asyncio.run(orchestrator.run())
+
+    assert state.rolling_summary, "compaction should have run"
+    assert len(state.summaries) <= 4
+    # the anchor survives compaction untouched
+    assert len(state.ledger) == 12
+    assert state.completed == list(range(1, 13))
+
+
+def test_export_report_surfaces_the_ledger_and_per_chapter_stats(tmp_path):
+    """The acceptance artefact: what was written, and what must stay true."""
+    _, workspace, _, orchestrator = make_orchestrator(tmp_path, chapters=3)
+    asyncio.run(orchestrator.start(INSTRUCTION))
+    state = asyncio.run(orchestrator.run())
+
+    path = orchestrator.export_report(state)
+    assert path == workspace.root / "report.md"
+    text = path.read_text(encoding="utf-8")
+
+    assert "改写前提" in text
+    assert INSTRUCTION in text
+    assert "进度：3/3" in text
+    assert "事实台账" in text
+    for entry in state.ledger:
+        assert entry.statement in text
+    assert "第 1 章" in text
+    assert "字数" in text
+
+
+def test_export_report_lists_failures(tmp_path):
+    class AlwaysConflicting(RecordingAuthor):
+        async def verify_chapter(self, summary, statements, ledger):
+            self.verify_calls += 1
+            return False, ["永久冲突"]
+
+    _, workspace, _, orchestrator = make_orchestrator(
+        tmp_path, chapters=2, author=AlwaysConflicting()
+    )
+    asyncio.run(orchestrator.start(INSTRUCTION))
+    with pytest.raises(RewriteConflict):
+        asyncio.run(orchestrator.run())
+
+    state = workspace.load_state()
+    assert state is not None
+    text = orchestrator.export_report(state).read_text(encoding="utf-8")
+    assert "失败" in text
+    assert "永久冲突" in text
+
+
 # --- context shape ----------------------------------------------------------
 
 
@@ -295,7 +366,7 @@ def test_chapter_prompt_orders_history_then_ledger_then_task(tmp_path):
     state = asyncio.run(orchestrator.start(INSTRUCTION))
     state.ledger.append(LedgerEntry(entry_id="c0001-1", chapter=1, statement="第一章的偏离"))
     state.rolling_summary = "早年梗概"
-    messages = build_chapter_messages(state, card, orchestrator.world_profile(), recent=1)
+    messages = build_chapter_messages(state, card, orchestrator.world_profile())
 
     system = messages[0]["content"]
     assert messages[0]["role"] == "system"

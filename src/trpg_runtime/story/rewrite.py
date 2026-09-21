@@ -488,15 +488,20 @@ def _ledger_block(ledger: Sequence[LedgerEntry]) -> str:
     return "\n".join(lines)
 
 
-def _history_block(state: RewriteState, recent: int) -> str:
+def _history_block(state: RewriteState) -> str:
+    """Every summary still held verbatim, plus whatever was compacted earlier.
+
+    Deliberately not windowed to the last few: ``compact`` is what trims this
+    list, and anything it has not folded into the rolling summary must stay
+    visible. Windowing here as well would silently drop the middle of the book.
+    """
     chunks: list[str] = []
     if state.rolling_summary.strip():
         chunks.append("# 早年情节梗概（压缩）\n" + state.rolling_summary.strip())
-    recent_summaries = state.summaries[-recent:] if recent > 0 else []
-    if recent_summaries:
-        lines = ["# 最近章节（逐章摘要）"]
+    if state.summaries:
+        lines = ["# 逐章摘要"]
         lines.extend(
-            f"- 第 {item.chapter} 章《{item.title}》：{item.summary}" for item in recent_summaries
+            f"- 第 {item.chapter} 章《{item.title}》：{item.summary}" for item in state.summaries
         )
         chunks.append("\n".join(lines))
     return "\n\n".join(chunks)
@@ -507,7 +512,6 @@ def build_chapter_messages(
     card: ChapterCard,
     world_profile: str,
     *,
-    recent: int = DEFAULT_RECENT_SUMMARIES,
     attempt_note: str = "",
 ) -> list[dict[str, str]]:
     """Assemble the prompt for one chapter: prefix, history, ledger, task.
@@ -525,7 +529,7 @@ def build_chapter_messages(
         if part.strip()
     )
     user_parts = [
-        _history_block(state, recent),
+        _history_block(state),
         _ledger_block(state.ledger),
         "# 本章任务\n"
         f"写作第 {card.chapter} 章《{card.title}》。\n"
@@ -696,14 +700,10 @@ class RewriteOrchestrator:
         attempt_note = ""
         last_violations: list[str] = []
         for attempt in range(1, MAX_CHAPTER_ATTEMPTS + 1):
-            messages = build_chapter_messages(
-                state, card, profile, recent=self.recent, attempt_note=attempt_note
-            )
+            messages = build_chapter_messages(state, card, profile, attempt_note=attempt_note)
             if estimate_tokens(messages) > self.context_limit:
                 await self.compact(state)
-                messages = build_chapter_messages(
-                    state, card, profile, recent=self.recent, attempt_note=attempt_note
-                )
+                messages = build_chapter_messages(state, card, profile, attempt_note=attempt_note)
             _log(
                 f"chapter {card.chapter}/{state.target_chapters} "
                 f"《{card.title}》writing (attempt {attempt}, "
@@ -846,6 +846,68 @@ class RewriteOrchestrator:
         path = self.workspace.root / "book.md"
         self.workspace.write_text(path, "\n".join(lines))
         _log(f"book exported: {path} ({len(current.completed)} chapters)")
+        return path
+
+    def export_report(self, state: RewriteState | None = None) -> Path:
+        """An acceptance report: what was written, and what must stay true.
+
+        Drift is invisible in a finished draft; it becomes visible against the
+        ledger. This is the artefact a human checks the book against, and the
+        reason the ledger is kept as prose statements rather than ids.
+        """
+        current = state or self.workspace.load_state()
+        if current is None:
+            raise ValueError("no rewrite state to report on")
+        titles = {card.chapter: card.title for card in self.load_cards()}
+        lines = [
+            f"# {current.source_id}·仿写验收报告",
+            "",
+            f"- 改写前提：{current.brief.premise or current.brief.instruction}",
+            f"- 进度：{len(current.completed)}/{current.target_chapters}",
+            f"- 每章目标：{current.words_per_chapter} 字",
+            f"- 事实台账：{len(current.ledger)} 条",
+        ]
+        if current.brief.divergences:
+            lines.append("- 必须改变：" + "；".join(current.brief.divergences))
+        if current.brief.invariants:
+            lines.append("- 必须保留：" + "；".join(current.brief.invariants))
+
+        lines.extend(
+            [
+                "",
+                "## 逐章",
+                "",
+                "| 章 | 标题 | 字数 | 新增台账 | 摘要 |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for summary in current.summaries:
+            meta = self.workspace.read_json(self.workspace.meta_path(summary.chapter), {}) or {}
+            words = meta.get("words") or len(self.workspace.chapter_text(summary.chapter))
+            title = titles.get(summary.chapter) or summary.title
+            brief_summary = summary.summary.replace("\n", " ")[:80]
+            lines.append(
+                f"| {summary.chapter} | {title} | {words} | "
+                f"{len(summary.entries)} | {brief_summary} |"
+            )
+
+        lines.extend(["", "## 事实台账（此后不得推翻）", ""])
+        if current.ledger:
+            lines.extend(
+                f"- 第 {entry.chapter} 章｜{entry.kind}｜{entry.statement}"
+                for entry in current.ledger
+            )
+        else:
+            lines.append("（无）")
+
+        if current.failures:
+            lines.extend(["", "## 失败章节", ""])
+            for chapter in sorted(current.failures, key=lambda value: int(value)):
+                lines.append(f"- 第 {chapter} 章：{current.failures[chapter]}")
+
+        path = self.workspace.root / "report.md"
+        self.workspace.write_text(path, "\n".join(lines))
+        _log(f"report exported: {path}")
         return path
 
     async def compact(self, state: RewriteState) -> None:
