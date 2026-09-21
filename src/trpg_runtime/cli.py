@@ -43,6 +43,17 @@ from .runtime import TurnOrchestrator
 from .scenario import load_scenario
 from .storage import EventStore
 from .story import SourceDocument, StoryBundle, load_bundle
+from .story.decomposer import StoryCompilationWorkspace
+from .story.rewrite import (
+    DEFAULT_WORDS_PER_CHAPTER,
+    FakeRewriteAuthor,
+    OpenAIRewriteAuthor,
+    RewriteAuthor,
+    RewriteConflict,
+    RewriteOrchestrator,
+    RewriteState,
+    RewriteWorkspace,
+)
 
 app = typer.Typer(help="Agentic TRPG Runtime")
 console = Console()
@@ -415,6 +426,91 @@ def story_compile(
         f"facts: {result.fact_count}"
     )
     console.print(f"World info: [bold]{result.world_info_path}[/bold]")
+
+
+def _rewrite_author(kind: str) -> RewriteAuthor:
+    if kind == "fake":
+        return FakeRewriteAuthor()
+    if kind == "llm":
+        return OpenAIRewriteAuthor()
+    raise typer.BadParameter(f"unknown rewrite author: {kind}")
+
+
+def _default_rewrite_dir(compilation: StoryCompilationWorkspace) -> Path:
+    """Sit next to the compilation it came from, so the pair is easy to find."""
+    return compilation.root.parent / f"{compilation.root.name}-rewrite"
+
+
+def _print_rewrite_status(state: RewriteState, workspace: RewriteWorkspace) -> None:
+    body = (
+        f"原作：{state.source_id}\n"
+        f"改写前提：{state.brief.premise or state.brief.instruction}\n"
+        f"进度：{len(state.completed)}/{state.target_chapters} 章\n"
+        f"事实台账：{len(state.ledger)} 条既定偏离\n"
+        f"每章目标：{state.words_per_chapter} 字\n"
+        f"产物目录：{workspace.root}"
+    )
+    console.print(Panel(body, title="仿写进度"))
+    if state.failures:
+        console.print(
+            f"[yellow]失败章节：{json.dumps(state.failures, ensure_ascii=False)}[/yellow]"
+        )
+    if state.completed:
+        console.print(f"正文从 {workspace.chapter_path(1)} 开始。")
+
+
+@app.command("rewrite")
+def rewrite(
+    workspace: str,
+    brief: str | None = typer.Option(None, "--brief", help="你的改写方案，一句话。首次运行必需。"),
+    output: str | None = typer.Option(None, "--output", help="改写工作区目录。"),
+    chapters: int | None = typer.Option(None, "--chapters", min=1, help="只写前 N 章。"),
+    words: int = typer.Option(DEFAULT_WORDS_PER_CHAPTER, "--words", min=300, help="每章目标字数。"),
+    author: str = typer.Option("llm", "--author", help="Writer: fake (offline) or llm."),
+    status: bool = typer.Option(False, "--status", help="只看进度，不写作。"),
+):
+    """一次交互的长篇仿写：说一句你想看到什么不同，产出一本书。
+
+    在编译产物（trpg story-compile 的输出）上运行。首次给 --brief，
+    之后重跑同一条命令即从断点续写，已完成的章节不重算。
+    """
+    compilation = StoryCompilationWorkspace(Path(workspace))
+    if not compilation.chapter_cards_dir.exists():
+        raise typer.BadParameter(f"{workspace} 里没有编译产物；先运行 trpg story-compile")
+
+    writer = _rewrite_author(author)
+    target = RewriteWorkspace(Path(output) if output else _default_rewrite_dir(compilation))
+    target.ensure()
+    orchestrator = RewriteOrchestrator(target, compilation, writer, words_per_chapter=words)
+
+    existing = target.load_state()
+    if status:
+        if existing is None:
+            console.print("这个目录还没有开始仿写。")
+            return
+        _print_rewrite_status(existing, target)
+        return
+    if existing is None and not brief:
+        raise typer.BadParameter("首次运行需要 --brief，说出你想看到什么不同")
+
+    async def run_all() -> RewriteState:
+        try:
+            state = existing
+            if state is None:
+                state = await orchestrator.start(brief or "", target=chapters)
+            return await orchestrator.run(target=chapters or state.target_chapters)
+        finally:
+            await writer.aclose()
+
+    try:
+        state = asyncio.run(run_all())
+    except RewriteConflict as exc:
+        console.print(f"[red]改写中断：{exc}[/red]")
+        failed = target.load_state()
+        if failed is not None:
+            _print_rewrite_status(failed, target)
+        raise typer.Exit(code=1) from exc
+    _print_rewrite_status(state, target)
 
 
 @app.command("story-import")

@@ -67,6 +67,19 @@ trpg story-play examples/story/lantern_gate.yaml lantern-demo --branch-id hesita
 
 See [Story Mode design and extension points](docs/story-mode.md) for the bundle schema, author contract, state-patch boundary, local LLM configuration, and end-to-end validation.
 
+## 仿写模式 | Rewrite mode
+
+在拆书产物上说一句"我想看到什么不同"，系统自主产出**同量级长篇**。整本书只交互这一次。
+
+```bash
+trpg rewrite runtime-data/story-books/duqing --brief "如果林仙儿一开始就真心爱上阿飞"
+trpg rewrite runtime-data/story-books/duqing --status   # 看进度；重跑同一条命令即续写
+```
+
+长篇生成真正的敌人是**漂移**，不是文笔。三道防线对付它：改写前提写在静态前缀里、每章重申；与原作不同的既定事实进**事实台账**，而台账永不压缩（只有情节摘要可以）；每章写完做一致性检查，冲突就重写而不是发布。
+
+Rewrite mode turns one sentence about what should be different into a same-scale retelling, written chapter by chapter on top of the compilation products. Drift is fought with a static premise repeated every chapter, a never-compacted ledger of divergences, and a per-chapter consistency check. See [Rewrite mode](docs/rewrite-mode.md).
+
 ## 快速开始 | Quick start
 
 ```bash
@@ -117,6 +130,7 @@ trpg export-lorebook CAMPAIGN_ID [--output FILE]  # 导出为 SillyTavern world 
 trpg play CAMPAIGN_ID [--debug] [--fake]
 trpg story-import SOURCE [--output FILE] [--story-id ID]
 trpg story-compile SOURCE --output-dir DIR [--story-id ID]  # 可恢复拆书编译
+trpg rewrite COMPILED_DIR [--brief "改写方案"] [--chapters N] [--status]  # 一次交互的长篇仿写
 trpg story-new BUNDLE --session-id ID
 trpg story-play BUNDLE SESSION_ID [--author fake|llm]
 trpg story-read BUNDLE SESSION_ID [--scenes 3] [--choice ID] [--request-id ID] [--author fake|llm]
