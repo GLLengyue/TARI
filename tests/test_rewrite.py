@@ -222,6 +222,36 @@ def test_widening_the_target_updates_state(tmp_path):
     assert reloaded.completed == [1, 2, 3, 4]
 
 
+def test_export_book_assembles_a_readable_volume(tmp_path):
+    """A retelling should come out as one book, honestly labelled."""
+    _, workspace, _, orchestrator = make_orchestrator(tmp_path, chapters=3)
+    asyncio.run(orchestrator.start(INSTRUCTION, target=2))
+    state = asyncio.run(orchestrator.run(target=2))
+
+    path = orchestrator.export_book(state)
+    assert path == workspace.root / "book.md"
+    text = path.read_text(encoding="utf-8")
+
+    assert text.startswith("# demo·仿写")
+    assert INSTRUCTION in text  # the premise travels with the book
+    assert "已完成：2/2 章" in text
+    assert "## 目录" in text
+    # every written chapter appears as a heading, in order
+    assert text.index("## 第1章") < text.index("## 第2章")
+    assert workspace.chapter_text(1) in text
+    assert workspace.chapter_text(2) in text
+
+
+def test_export_book_reports_partial_progress(tmp_path):
+    _, workspace, _, orchestrator = make_orchestrator(tmp_path, chapters=4)
+    asyncio.run(orchestrator.start(INSTRUCTION))
+    state = asyncio.run(orchestrator.run(target=4))
+    state.completed = [1, 2]
+    text = orchestrator.export_book(state).read_text(encoding="utf-8")
+    assert "已完成：2/4 章" in text
+    assert "## 第3章" not in text
+
+
 # --- compaction -------------------------------------------------------------
 
 

@@ -164,10 +164,13 @@ trpg rewrite runtime-data/story-books/duqing --status
 
 ```text
 runtime-data/story-books/duqing-rewrite/
+  book.md                           # 成书：目录 + 全部已完成章节，可直接读
   rewrite.json                      # brief + 事实台账 + 进度
   chapters/chapter_0001.md          # 正文，按章可读
   chapters/chapter_0001.meta.json   # 本章摘要 + 新增台账条目
 ```
+
+每次运行结束都会重写 `book.md`；未写完时它会如实标注 `已完成：N/M 章`。
 
 ## 11. 实现记录
 

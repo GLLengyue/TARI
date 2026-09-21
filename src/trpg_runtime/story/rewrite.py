@@ -810,6 +810,44 @@ class RewriteOrchestrator:
             f"{len(draft.entries)} ledger entries, ledger size {len(state.ledger)})"
         )
 
+    def export_book(self, state: RewriteState | None = None) -> Path:
+        """Assemble the written chapters into one readable file.
+
+        A retelling is something you read; a directory of chapter files is not.
+        The export carries the premise and the progress so a partial book is
+        still honestly labelled.
+        """
+        current = state or self.workspace.load_state()
+        if current is None:
+            raise ValueError("no rewrite state to export")
+        titles = {card.chapter: card.title for card in self.load_cards()}
+        premise = current.brief.premise or current.brief.instruction
+        lines = [
+            f"# {current.source_id}·仿写",
+            "",
+            f"> 改写前提：{premise}",
+            f"> 已完成：{len(current.completed)}/{current.target_chapters} 章",
+            "",
+            "## 目录",
+            "",
+        ]
+        for number in current.completed:
+            lines.append(f"{number}. {titles.get(number, f'第 {number} 章')}")
+        lines.append("")
+        for number in current.completed:
+            lines.extend(
+                [
+                    f"## {titles.get(number, f'第 {number} 章')}",
+                    "",
+                    self.workspace.chapter_text(number),
+                    "",
+                ]
+            )
+        path = self.workspace.root / "book.md"
+        self.workspace.write_text(path, "\n".join(lines))
+        _log(f"book exported: {path} ({len(current.completed)} chapters)")
+        return path
+
     async def compact(self, state: RewriteState) -> None:
         """Roll the oldest chapter summaries into one, keeping the ledger intact."""
         keep = self.recent

@@ -511,6 +511,7 @@ def rewrite(
             _print_rewrite_status(failed, target)
         raise typer.Exit(code=1) from exc
     _print_rewrite_status(state, target)
+    console.print(f"成书：[bold]{orchestrator.export_book(state)}[/bold]")
 
 
 @app.command("story-import")
