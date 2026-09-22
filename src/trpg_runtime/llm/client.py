@@ -277,6 +277,25 @@ class OpenAICompatibleClient:
         return str(content)
 
     @staticmethod
+    def raise_if_truncated(
+        payload: dict[str, Any], text: str, *, budget: int | None = None
+    ) -> None:
+        """Fail loudly when the provider stopped because it ran out of budget.
+
+        A truncated body is worse than a failed call: it reads as a finished
+        piece of prose, so it gets published, summarised and journalled into
+        the ledger while silently missing its own ending.
+        """
+        if OpenAICompatibleClient.finish_reason(payload) != "length":
+            return
+        where = f"max_tokens={budget}" if budget is not None else "the configured token budget"
+        raise ValueError(
+            f"model output was truncated: hit {where} before finishing "
+            f"(finish_reason=length, {len(text)} chars); raise TARI_LLM_MAX_TOKENS"
+            f" or lower the requested length | tail={text[-200:]!r}"
+        )
+
+    @staticmethod
     def finish_reason(payload: dict[str, Any]) -> str:
         """Return the provider's stop reason, or "" when it is unavailable."""
         try:
@@ -296,7 +315,9 @@ class OpenAICompatibleClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return self.message_content(payload)
+        text = self.message_content(payload)
+        self.raise_if_truncated(payload, text, budget=max_tokens)
+        return text
 
     async def complete_json(
         self,
@@ -313,12 +334,7 @@ class OpenAICompatibleClient:
         )
         text = self.message_content(payload)
         reason = self.finish_reason(payload)
-        if reason == "length":
-            raise ValueError(
-                "model output was truncated by max_tokens (finish_reason=length);"
-                " raise the token budget or lower --chapter-chars"
-                " | raw=" + repr(text[:400])
-            )
+        self.raise_if_truncated(payload, text, budget=max_tokens)
         try:
             return extract_json_object(text)
         except ValueError as exc:

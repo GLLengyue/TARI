@@ -40,6 +40,12 @@ DEFAULT_RECENT_SUMMARIES = 4
 #: How many relationship edges from the source baseline reach the prompt.
 RELATIONSHIP_BASELINE = 120
 
+#: Characters of the world profile the brief is allowed to read.
+BRIEF_PROFILE_BUDGET = 4500
+
+#: Characters of real source prose the brief reads to judge tone.
+BRIEF_SAMPLE_BUDGET = 2500
+
 #: Attempts allowed per chapter before it is recorded as a failure.
 MAX_CHAPTER_ATTEMPTS = 3
 
@@ -61,7 +67,9 @@ CHAPTER_CONTRACT = (
     "\n"
     "## 每一章怎么做\n"
     "- 只写本章。不要概括全书，不要预告下一章，不要在结尾做总结。\n"
-    "- 按本章大纲推进：可以增补细节、对话与场景，但不要跳过应当发生的事。\n"
+    "- **改写计划优先于原作梗概。** 原作大纲是参照，不是义务：计划要求不同走向时按计划写，"
+    "计划未涉及的部分才按原作推进，且本章内的因果要自洽。\n"
+    "- 不要为了保住原作情节而把改写推给后文 —— 计划里写着本章要发生的事，本章就发生。\n"
     "- 人物要像他自己。改写改变的是处境、关系与选择，不是所有人的性格底色。\n"
     "\n"
     "## 笔法\n"
@@ -80,17 +88,32 @@ BRIEF_CONTRACT = (
     "- premise：一句话说清这本书的前提变化；\n"
     "- divergences：必须改变的点（具体到人物、关系或事件）；\n"
     "- invariants：必须保留的点（人物的性格底色、世界的规则）；\n"
-    "- tone：语体要求，若读者没提就沿用原作的语体。\n"
+    "- tone：语体要求，要能指认原作的语言特征（句式、节奏、称呼习惯），"
+    "若读者没提就沿用原作的语体 —— 依据是给出的原作正文样本，不要凭情节大纲猜；\n"
+    "- plan：**分章改写计划**，这是最要紧的一项。读者给的原作章节清单会告诉你"
+    "原作每一章讲什么、某个人物原本到第几章才出场。据此写出 3-8 条计划，每条：\n"
+    "  chapter（从第几章开始生效）+ change（这一段的改写要求，具体到谁做什么）。\n"
+    "  写法要求：\n"
+    "  · 改写前提若涉及「某个人物早点出现/早点改变」，就必须有一条计划明确"
+    "他在第几章登场、那场戏是什么样的，不能等原作让他出场；\n"
+    "  · 计划要落在具体章号上，不要写成「全书保持」这种空话；\n"
+    "  · 第一条计划通常从第 1 章开始，因为读者要的就是「一开始就不同」；\n"
+    "  · 不要改写读者的原意，只把它翻译成可执行的章节安排。\n"
     "只返回 JSON："
-    '{"premise":"...","divergences":["..."],"invariants":["..."],"tone":"..."}'
+    '{"premise":"...","divergences":["..."],"invariants":["..."],"tone":"...",'
+    '"plan":[{"chapter":1,"change":"..."}]}'
 )
 
 EXTRACT_CONTRACT = (
-    "给你一章正文。请提炼它的索引信息，供后续章节使用。\n"
+    "给你一章新写的正文，以及它所对应的原作情节。提炼索引信息，供后续章节使用。\n"
     "- summary：这一章发生了什么，300 字以内，只写事实与因果，不写评价；\n"
-    "- entries：本章确立的、与原作不同且此后必须成立的既定事实。"
-    "只记录会影响后续连续性的（人物状态、关系、承诺、物品归属、关键事件），"
-    "每条一句话。若本章没有新的偏离，返回空列表。\n"
+    "- entries：**与原作不同的**、且此后必须成立的既定事实。"
+    "判断标准是「原作里没有这样发展」：原作本来就有的人物、事件与关系不算偏离，"
+    "不要写进 entries；只有改写带来的变化才算 —— 某人的动机或立场变了、某件事的结果不同了、"
+    "某段关系被改写、原作此时尚未出现的人提前出现了。"
+    "只记录会影响后续连续性的（人物状态、关系、承诺、物品归属、关键事件），每条一句话。\n"
+    "若本章完全按原作推进、没有任何偏离，entries 返回空列表。"
+    "空列表是正常结果，不要把「本章发生了什么」当成偏离。\n"
     "只返回 JSON："
     '{"summary":"...","entries":[{"statement":"...","kind":"divergence"}]}\n'
     "kind 取值：divergence / consequence / character / relationship / object / promise"
@@ -131,6 +154,19 @@ def _atomic_write(path: Path, content: str) -> None:
 # --------------------------------------------------------------------------
 
 
+class RewritePlanPoint(BaseModel):
+    """Where the retelling diverges from the source, and how.
+
+    A premise alone cannot steer a long book. Without per-chapter
+    instructions the writer's only concrete input is the source's own outline,
+    and the "rewrite" degrades into a paraphrase of it -- which is what the
+    first live run produced, chapter after chapter.
+    """
+
+    chapter: int
+    change: str
+
+
 class RewriteBrief(BaseModel):
     """The reader's single sentence, expanded into workable constraints."""
 
@@ -139,6 +175,7 @@ class RewriteBrief(BaseModel):
     divergences: list[str] = Field(default_factory=list)
     invariants: list[str] = Field(default_factory=list)
     tone: str = ""
+    plan: list[RewritePlanPoint] = Field(default_factory=list)
 
 
 class LedgerEntry(BaseModel):
@@ -259,7 +296,15 @@ class RewriteAuthor(ABC):
     """The model-facing surface of rewrite mode."""
 
     @abstractmethod
-    async def plan_brief(self, instruction: str, world_profile: str, sample: str) -> RewriteBrief:
+    async def plan_brief(
+        self, instruction: str, world_profile: str, sample: str, chapter_titles: str = ""
+    ) -> RewriteBrief:
+        """Expand one reader sentence into a premise and a per-chapter plan.
+
+        ``chapter_titles`` is the source's chapter list: it is how the planner
+        learns that a character the reader wants earlier only appears at
+        chapter nine, and can therefore schedule the divergence.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -268,9 +313,14 @@ class RewriteAuthor(ABC):
 
     @abstractmethod
     async def extract_chapter(
-        self, chapter: int, title: str, prose: str
+        self, chapter: int, title: str, prose: str, source_outline: str = ""
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Return (summary, raw entries) for one written chapter."""
+        """Return (summary, raw entries) for one written chapter.
+
+        ``source_outline`` is how the original covered this chapter. Without it
+        the extractor cannot tell a divergence from something that happens in
+        the source anyway, and the ledger fills up with retold plot.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -303,7 +353,9 @@ class OpenAIRewriteAuthor(RewriteAuthor):
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def plan_brief(self, instruction: str, world_profile: str, sample: str) -> RewriteBrief:
+    async def plan_brief(
+        self, instruction: str, world_profile: str, sample: str, chapter_titles: str = ""
+    ) -> RewriteBrief:
         payload = await self._client.complete_json(
             [
                 {"role": "system", "content": BRIEF_CONTRACT},
@@ -312,22 +364,36 @@ class OpenAIRewriteAuthor(RewriteAuthor):
                     "content": json.dumps(
                         {
                             "读者的要求": instruction,
-                            "原作世界档案": world_profile[:4000],
-                            "原作开头样本": sample[:2000],
+                            "原作世界档案": world_profile[:6000],
+                            "原作正文样本": sample[:3000],
+                            "原作章节清单": chapter_titles[:4000],
                         },
                         ensure_ascii=False,
                     ),
                 },
             ],
             temperature=0.2,
-            max_tokens=1200,
+            max_tokens=2000,
         )
+        plan: list[RewritePlanPoint] = []
+        for item in payload.get("plan") or []:
+            if not isinstance(item, dict):
+                continue
+            change = str(item.get("change") or "").strip()
+            if not change:
+                continue
+            try:
+                chapter = int(item.get("chapter") or 1)
+            except (TypeError, ValueError):
+                chapter = 1
+            plan.append(RewritePlanPoint(chapter=max(1, chapter), change=change))
         return RewriteBrief(
             instruction=instruction,
             premise=str(payload.get("premise") or instruction),
             divergences=[str(item) for item in payload.get("divergences") or []],
             invariants=[str(item) for item in payload.get("invariants") or []],
             tone=str(payload.get("tone") or ""),
+            plan=sorted(plan, key=lambda point: point.chapter),
         )
 
     async def write_chapter(self, messages: Sequence[dict[str, str]]) -> str:
@@ -335,7 +401,7 @@ class OpenAIRewriteAuthor(RewriteAuthor):
         return text.strip()
 
     async def extract_chapter(
-        self, chapter: int, title: str, prose: str
+        self, chapter: int, title: str, prose: str, source_outline: str = ""
     ) -> tuple[str, list[dict[str, Any]]]:
         payload = await self._client.complete_json(
             [
@@ -343,7 +409,12 @@ class OpenAIRewriteAuthor(RewriteAuthor):
                 {
                     "role": "user",
                     "content": json.dumps(
-                        {"chapter": chapter, "title": title, "正文": prose},
+                        {
+                            "chapter": chapter,
+                            "title": title,
+                            "原作本章情节": source_outline,
+                            "本章正文": prose,
+                        },
                         ensure_ascii=False,
                     ),
                 },
@@ -403,14 +474,24 @@ class FakeRewriteAuthor(RewriteAuthor):
         self.compact_marker = compact_marker
         self.write_calls = 0
         self.verify_calls = 0
+        #: The source outline handed to each extract call, in chapter order.
+        self.extract_outlines: list[str] = []
+        #: What each plan_brief call actually received.
+        self.brief_inputs: list[dict[str, str]] = []
 
-    async def plan_brief(self, instruction: str, world_profile: str, sample: str) -> RewriteBrief:
+    async def plan_brief(
+        self, instruction: str, world_profile: str, sample: str, chapter_titles: str = ""
+    ) -> RewriteBrief:
+        self.brief_inputs.append(
+            {"profile": world_profile, "sample": sample, "titles": chapter_titles}
+        )
         return RewriteBrief(
             instruction=instruction,
             premise=instruction,
             divergences=[f"按读者的要求改变：{instruction}"],
             invariants=["人物性格底色不变"],
             tone="沿用原作语体",
+            plan=[RewritePlanPoint(chapter=1, change=f"从第 1 章起：{instruction}")],
         )
 
     async def write_chapter(self, messages: Sequence[dict[str, str]]) -> str:
@@ -423,8 +504,9 @@ class FakeRewriteAuthor(RewriteAuthor):
         )
 
     async def extract_chapter(
-        self, chapter: int, title: str, prose: str
+        self, chapter: int, title: str, prose: str, source_outline: str = ""
     ) -> tuple[str, list[dict[str, Any]]]:
+        self.extract_outlines.append(source_outline)
         return (
             f"第 {chapter} 章：{title}。按大纲推进，主角作出与改写前提一致的选择。",
             [
@@ -488,6 +570,51 @@ def _ledger_block(ledger: Sequence[LedgerEntry]) -> str:
     return "\n".join(lines)
 
 
+def _relationship_lines(relationships: Any, *, limit: int = RELATIONSHIP_BASELINE) -> list[str]:
+    """Render the source's relationship baseline as prompt lines."""
+    if not isinstance(relationships, list) or not relationships:
+        return []
+    lines = ["# 人物关系（原作基线；本次改写可能改变其中若干条）"]
+    for item in relationships[:limit]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        description = str(item.get("description") or "").strip()
+        if not label and not description:
+            continue
+        lines.append(
+            f"- {label}：{description}" if label and description else f"- {label or description}"
+        )
+    return lines if len(lines) > 1 else []
+
+
+def _plan_block(brief: RewriteBrief, chapter: int) -> str:
+    """The rewrite instructions in force for one chapter.
+
+    Every point up to this chapter stays in force, not just the most recent
+    one: a divergence scheduled from chapter 1 that the writer has not honoured
+    yet must not quietly expire because a later point exists.
+    """
+    active = [point for point in brief.plan if point.chapter <= chapter]
+    if not active:
+        return ""
+    lines = ["# 改写计划（本章必须兑现）"]
+    lines.extend(f"- 第 {point.chapter} 章起：{point.change}" for point in active)
+    return "\n".join(lines) + "\n"
+
+
+def _source_outline(card: ChapterCard) -> str:
+    """How the original covered one chapter.
+
+    The extractor needs this to tell a divergence from retold plot; without it
+    every chapter of the source reads as a divergence.
+    """
+    parts = [card.chapter_outline_600.strip()]
+    if card.story_line.strip():
+        parts.append("情节线：" + card.story_line.strip())
+    return "\n".join(part for part in parts if part)
+
+
 def _history_block(state: RewriteState) -> str:
     """Every summary still held verbatim, plus whatever was compacted earlier.
 
@@ -534,8 +661,9 @@ def build_chapter_messages(
         "# 本章任务\n"
         f"写作第 {card.chapter} 章《{card.title}》。\n"
         f"目标长度：{state.words_per_chapter} 字左右。\n"
-        f"原作本章梗概（供参考，改写后可不同）：{card.chapter_outline_600.strip()}\n"
-        f"本章情节线：{card.story_line.strip() or '（未提供）'}\n"
+        + _plan_block(state.brief, card.chapter)
+        + f"原作本章梗概（仅供参照）：{card.chapter_outline_600.strip()}\n"
+        + f"原作情节线（可调整）：{card.story_line.strip() or '（未提供）'}\n"
         + ("本章要点：" + "；".join(card.highlights) + "\n" if card.highlights else "")
         + "只写这一章。",
     ]
@@ -628,24 +756,66 @@ class RewriteOrchestrator:
         # The relationship web matters most here: a retelling usually changes
         # exactly these edges, so the baseline has to be visible.
         relationships = self.compilation.read_json(self.compilation.relationships_path, [])
-        if isinstance(relationships, list) and relationships:
-            lines = ["# 人物关系（原作基线；本次改写可能改变其中若干条）"]
-            for item in relationships[:RELATIONSHIP_BASELINE]:
-                if not isinstance(item, dict):
-                    continue
-                label = str(item.get("label") or "").strip()
-                description = str(item.get("description") or "").strip()
-                if not label and not description:
-                    continue
-                lines.append(
-                    f"- {label}：{description}"
-                    if label and description
-                    else f"- {label or description}"
-                )
-            if len(lines) > 1:
-                chunks.append("\n".join(lines))
+        lines = _relationship_lines(relationships)
+        if lines:
+            chunks.append("\n".join(lines))
 
         return "\n\n".join(chunk for chunk in chunks if chunk.strip())
+
+    def brief_profile(self, *, budget: int = BRIEF_PROFILE_BUDGET) -> str:
+        """The profile window the brief is written against.
+
+        A brief decides what the retelling changes, and what it changes is
+        usually a relationship -- so the relationship baseline has to be in the
+        window. Taking the head of the profile instead, which is the obvious
+        thing to do, spends the whole budget on setting prose and silently cuts
+        the relationship web that sits at the end.
+        """
+        lines = _relationship_lines(
+            self.compilation.read_json(self.compilation.relationships_path, [])
+        )
+        block = "\n".join(lines)
+        profile = self.world_profile()
+        head_budget = max(0, budget - len(block) - 2)
+        head = profile[:head_budget].rstrip()
+        return f"{head}\n\n{block}".strip() if block else head
+
+    def chapter_titles(self, *, limit: int = 120) -> str:
+        """The source's chapter list, which the planner schedules against.
+
+        This is what lets the planner notice that a character the reader wants
+        early only arrives at chapter nine, and put the divergence somewhere.
+        """
+        lines = [f"第 {card.chapter} 章《{card.title}》" for card in self.load_cards()[:limit]]
+        return "\n".join(lines)
+
+    def source_sample(self, *, budget: int = BRIEF_SAMPLE_BUDGET) -> str:
+        """Real source prose, for the brief to judge tone from.
+
+        Outline cards describe what happens; they say nothing about how it is
+        written, which is the one thing a style judgement needs.
+        """
+        payload = self.compilation.read_json(self.compilation.source_path, {})
+        chapters = payload.get("chapters") if isinstance(payload, dict) else None
+        if not isinstance(chapters, list) or not chapters:
+            cards = self.load_cards(1)
+            return cards[0].chapter_outline_600 if cards else ""
+        sample_parts: list[str] = []
+        used = 0
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            text = str(chapter.get("text") or "").strip()
+            if not text:
+                continue
+            take = text[: max(0, budget - used)]
+            if not take:
+                break
+            sample_parts.append(take)
+            used += len(take)
+            if used >= budget:
+                break
+        return "\n\n".join(sample_parts)
 
     # -- entry points ---------------------------------------------------
 
@@ -654,9 +824,9 @@ class RewriteOrchestrator:
         cards = self.load_cards(target)
         if not cards:
             raise ValueError("no chapter cards found; compile the source first")
-        profile = self.world_profile()
-        sample = cards[0].chapter_outline_600
-        brief = await self.author.plan_brief(instruction, profile, sample)
+        brief = await self.author.plan_brief(
+            instruction, self.brief_profile(), self.source_sample(), self.chapter_titles()
+        )
         manifest = self.compilation.load_manifest()
         state = RewriteState(
             source_id=str(manifest.get("source_id") or self.compilation.root.name),
@@ -716,7 +886,7 @@ class RewriteOrchestrator:
                 continue
 
             summary, raw_entries = await self.author.extract_chapter(
-                card.chapter, card.title, prose
+                card.chapter, card.title, prose, source_outline=_source_outline(card)
             )
             entries = self._make_entries(state, card.chapter, raw_entries)
             accepted, violations = await self.author.verify_chapter(
@@ -871,6 +1041,12 @@ class RewriteOrchestrator:
             lines.append("- 必须改变：" + "；".join(current.brief.divergences))
         if current.brief.invariants:
             lines.append("- 必须保留：" + "；".join(current.brief.invariants))
+
+        if current.brief.plan:
+            lines.extend(["", "## 改写计划（每章兑现情况需人工核对）", ""])
+            lines.extend(
+                f"- 第 {point.chapter} 章起：{point.change}" for point in current.brief.plan
+            )
 
         lines.extend(
             [

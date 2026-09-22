@@ -51,8 +51,35 @@ def make_compilation(tmp_path: Path, chapters: int = 5) -> StoryCompilationWorks
         comp.write_json(
             comp.chapter_cards_dir / f"chapter_{number:04d}.json", card.model_dump(mode="json")
         )
-    (comp.world_dir / "world.md").write_text("世界设定：这是一座多雨的城。", encoding="utf-8")
+    (comp.world_dir / "world.md").write_text(
+        "世界设定：这是一座多雨的城。" + "风雪与长街。" * 900, encoding="utf-8"
+    )
     comp.write_json(comp.entities_path, [{"name": "阿飞"}, {"name": "林仙儿"}])
+    comp.write_json(
+        comp.relationships_path,
+        [
+            {
+                "source": "阿飞",
+                "target": "林仙儿",
+                "label": "单恋",
+                "description": "阿飞把林仙儿当作唯一的光。",
+            }
+        ],
+    )
+    comp.write_json(
+        comp.source_path,
+        {
+            "source_id": "demo",
+            "chapters": [
+                {
+                    "chapter_id": "demo:chapter:001",
+                    "ordinal": 1,
+                    "title": "第1章",
+                    "text": "冷风如刀。阿飞站在长街的尽头，手里握着一块铁片。",
+                }
+            ],
+        },
+    )
     return comp
 
 
@@ -99,6 +126,68 @@ def test_start_requires_compiled_cards(tmp_path):
     orchestrator = RewriteOrchestrator(workspace, empty, FakeRewriteAuthor())
     with pytest.raises(ValueError, match="compile the source first"):
         asyncio.run(orchestrator.start(INSTRUCTION))
+
+
+def test_brief_window_keeps_the_relationship_baseline(tmp_path):
+    """A brief decides what changes, and what changes is usually a relationship.
+
+    The profile is much longer than the brief budget, so a window that simply
+    takes its head cuts the relationship web that sits at the end -- which is
+    exactly how the first live run lost it.
+    """
+    _, _, _, orchestrator = make_orchestrator(tmp_path, chapters=2)
+    window = orchestrator.brief_profile()
+    assert "人物关系" in window
+    assert "单恋" in window
+    assert len(window) <= 4500
+
+
+def test_brief_sample_is_source_prose_not_an_outline(tmp_path):
+    """Tone is judged from prose; a plot outline cannot answer it."""
+    _, _, _, orchestrator = make_orchestrator(tmp_path, chapters=2)
+    sample = orchestrator.source_sample()
+    assert "冷风如刀" in sample
+    assert "大纲" not in sample
+
+
+def test_extract_sees_the_source_outline(tmp_path):
+    """Without the original's version of the chapter, retold plot reads as divergence."""
+    _, _, author, orchestrator = make_orchestrator(tmp_path, chapters=2)
+    asyncio.run(orchestrator.start(INSTRUCTION))
+    asyncio.run(orchestrator.run())
+
+    assert len(author.extract_outlines) == 2
+    assert all(outline.strip() for outline in author.extract_outlines)
+
+
+def test_planner_is_given_the_source_chapter_list(tmp_path):
+    """The planner can only schedule an early arrival if it can see when the
+    character originally arrives -- 林仙儿 first appears in chapter nine."""
+    _, _, author, orchestrator = make_orchestrator(tmp_path, chapters=3)
+    asyncio.run(orchestrator.start(INSTRUCTION))
+    assert author.brief_inputs
+    titles = author.brief_inputs[-1]["titles"]
+    assert "第 1 章" in titles
+    assert "第 3 章" in titles
+
+
+def test_plan_is_in_force_for_every_chapter_it_covers(tmp_path):
+    """A premise without a plan is a paraphrase generator.
+
+    Instructions scheduled from chapter 1 must still be in force at chapter N,
+    not expire the moment a later point exists.
+    """
+    _, _, author, orchestrator = make_orchestrator(tmp_path, chapters=4)
+    asyncio.run(orchestrator.start(INSTRUCTION))
+    state = asyncio.run(orchestrator.run())
+
+    assert state.brief.plan, "the brief must carry a per-chapter plan"
+    for index, prompt in enumerate(author.chapter_prompts, start=1):
+        body = "\n".join(message["content"] for message in prompt)
+        assert "改写计划（本章必须兑现）" in body
+        for point in state.brief.plan:
+            if point.chapter <= index:
+                assert point.change in body
 
 
 # --- the anti-drift invariants ---------------------------------------------
@@ -282,7 +371,8 @@ def test_tight_context_limit_triggers_compaction(tmp_path):
 class VerboseSummaryAuthor(RecordingAuthor):
     """Summaries at the length a real model produces, not a fake's one-liner."""
 
-    async def extract_chapter(self, chapter, title, prose):
+    async def extract_chapter(self, chapter, title, prose, source_outline=""):
+        self.extract_outlines.append(source_outline)
         body = "事件依次发生，人物关系随之变化。" * 12
         return (
             f"第 {chapter} 章：{body}",
